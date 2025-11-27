@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import tensorflow as tf
-from tensorflow.keras.models import model_from_json
+from tensorflow.keras.models import load_model # Using load_model directly
 import os
 from typing import Tuple, Dict, Any, List
 
@@ -13,7 +13,7 @@ from typing import Tuple, Dict, Any, List
 
 # @st.cache_resource: يستخدم للتحميل مرة واحدة فقط
 @st.cache_resource
-def load_assets_final() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
+def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
     
     # تعريف القواميس الثابتة (لضمان أنها متاحة دائماً)
     recommendations_map = {
@@ -53,33 +53,24 @@ def load_assets_final() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
         "بيئة وتجهيز": {"المرافق التعليمية والمباني","التقنية بالمدارس"}
     }
 
+    # Default value for failure
     default_return = None, None, None, [], None, None, None, None
 
     try:
-        # 1. LOAD THE SINGLE ASSET FILE
-        if not os.path.exists('model_assets_final.pkl'):
-             st.error("❌ فشل: لم يتم العثور على ملف 'model_assets_final.pkl'. تأكد من رفع الملف الجديد للمستودع.")
-             return default_return
-        
-        assets = joblib.load('model_assets_final.pkl')
-        
-        # 2. RECONSTRUCT THE MODEL (from JSON config)
-        model_config = assets['model_config']
-        model = model_from_json(model_config)
-        
-        # 3. LOAD SCALERS AND INDICATORS
-        scaler_X = assets['scaler_X']
-        scaler_y = scaler_y
-        indicator_names = assets['indicator_names']
-
-        # 4. LOAD WEIGHTS (Need the separate H5 file for weights)
+        # 1. CHECK FILE EXISTENCE
         if not os.path.exists('ranking_model.h5'):
-             st.error("❌ فشل: تم العثور على ملف PKL، لكن ملف الأوزان 'ranking_model.h5' مفقود.")
+             st.error("❌ فشل: لم يتم العثور على ملف 'ranking_model.h5'. تأكد من أن الملفات موجودة في المستودع.")
              return default_return
-
-        model.load_weights('ranking_model.h5')
         
-        # 5. FEATURE IMPORTANCE EXTRACTION
+        # 2. LOAD ASSETS DIRECTLY (USING load_model for the whole H5 file)
+        model = load_model('ranking_model.h5', compile=False)
+        scaler_X = joblib.load('scaler_X.pkl')
+        scaler_y = joblib.load('scaler_y.pkl')
+        
+        with open('indicator_names.txt', 'r', encoding='utf-8') as f:
+            indicator_names = [line.strip() for line in f]
+
+        # 3. FEATURE IMPORTANCE EXTRACTION
         weights = model.layers[0].get_weights()[0]
         importances = np.mean(np.abs(weights), axis=1)
         importances = importances / importances.sum()
@@ -88,10 +79,12 @@ def load_assets_final() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
         return model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
     
     except Exception as e:
-        st.error(f"⚠️ فشل التحميل. يرجى التأكد من رفع ملفي (.pkl) و (.h5) معًا. الخطأ: {e}")
+        # General failure message
+        st.error(f"⚠️ فشل تحميل الأصول. تأكد من أن الملفات (.h5, .pkl, .txt) موجودة في المستودع بجانب app.py.")
+        st.error(f"تلميح: قد تكون مشكلة في حجم ملف .h5 أو في طريقة حفظه. الخطأ المفصل: {e}")
         return default_return
 
-model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = load_assets_final()
+model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = load_assets_direct()
 
 # دالة التآزر (من الجزء 8 في كودك الأصلي)
 def synergy_multiplier(selected_inds, clusters):
