@@ -4,10 +4,11 @@ import numpy as np
 import joblib
 import tensorflow as tf
 from tensorflow.keras.models import load_model
+# المكتبات اللازمة للتحميل الآمن من الرابط السري:
 import requests
 import zipfile
-from io import BytesIO
-import os
+from io import BytesIO 
+import os 
 
 # ======================================================================
 # -------------------- 1. تحميل الأصول الآمن والمؤمن --------------------
@@ -18,7 +19,7 @@ def load_assets_secure():
     # 1. جلب رابط التحميل الآمن من مفاتيح السرية (Secrets)
     if "ASSET_DOWNLOAD_URL" not in st.secrets:
         st.error("⚠️ فشل: لم يتم العثور على مفتاح ASSET_DOWNLOAD_URL السري. لا يمكن تحميل النموذج.")
-        return None, None, None, [], None, None, None
+        return None, None, None, [], None, None, None, None
 
     ASSET_URL = st.secrets["ASSET_DOWNLOAD_URL"]
     
@@ -28,13 +29,13 @@ def load_assets_secure():
         response = requests.get(ASSET_URL, stream=True)
         response.raise_for_status() # يتحقق من وجود خطأ في الرابط (مثل 404 أو 403)
         
+        # فك ضغط الملفات في مسار مؤقت
         with zipfile.ZipFile(BytesIO(response.content)) as z:
-            # يفترض أن الملفات (.h5, .pkl, .txt) موجودة داخل model_assets.zip
             z.extractall(path=".") 
         st.write("✅ تم تحميل وفك ضغط الأصول بنجاح.")
     except Exception as e:
         st.error(f"⚠️ خطأ في التحميل/فك الضغط. تأكد من إعدادات مشاركة Google Drive و صلاحية الرابط. الخطأ: {e}")
-        return None, None, None, [], None, None, None
+        return None, None, None, [], None, None, None, None
 
     # 3. تحميل النموذج والمتغيرات من الملفات التي تم فك ضغطها
     try:
@@ -45,7 +46,7 @@ def load_assets_secure():
         with open('indicator_names.txt', 'r', encoding='utf-8') as f:
             indicator_names = [line.strip() for line in f]
 
-        # 4. تعاريف القواميس الثابتة
+        # 4. تعاريف القواميس الثابتة (لضمان أنها متاحة بعد التحميل)
         recommendations_map = {
             "الكفاءة للعنصر البشري": "تطوير برامج تدريبية مستمرة للمعلمين وربطها بتقييم الأداء الفردي.",
             "المناهج": "مراجعة شاملة للمناهج وتحديثها لتتوافق مع مهارات القرن 21.",
@@ -89,13 +90,13 @@ def load_assets_secure():
         importances = importances / importances.sum()
         feature_importance_map = {indicator_names[i]: float(importances[i]) for i in range(len(indicator_names))}
 
-
         return model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
     
     except Exception as e:
         st.error(f"⚠️ خطأ في تحميل الأصول (بعد فك الضغط). تأكد من سلامة ملفاتك. الخطأ: {e}")
         return None, None, None, [], None, None, None, None
 
+# يجب استدعاء الدالة الجديدة هنا:
 model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = load_assets_secure()
 
 # دالة التآزر (من الجزء 8 في كودك الأصلي)
@@ -114,6 +115,11 @@ def synergy_multiplier(selected_inds, clusters):
 
 def run_prediction_and_analysis(input_values, model, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map):
     
+    # تحقق من وجود النموذج قبل التشغيل
+    if model is None:
+        st.warning("النموذج غير جاهز بسبب خطأ في التحميل الآمن. يرجى مراجعة رسائل الخطأ.")
+        return None, None, None, None, None, None, None, None
+
     # 1. تجهيز المدخلات
     input_array = np.array([input_values]).astype(float)
     
@@ -214,59 +220,61 @@ if model and indicator_names:
             input_values, model, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map
         )
         
-        # --- قسم لوحة القيادة (Dashboard) ---
-        st.header("🥇 ملخص النتائج والتوجيه الاستراتيجي")
-        st.markdown("---")
-        
-        col1, col2, col3 = st.columns(3)
+        # إذا كانت هناك قيم مخرجة (لم يحدث خطأ في run_prediction_and_analysis)
+        if y_pred_orig is not None:
+            # --- قسم لوحة القيادة (Dashboard) ---
+            st.header("🥇 ملخص النتائج والتوجيه الاستراتيجي")
+            st.markdown("---")
+            
+            col1, col2, col3 = st.columns(3)
 
-        # المقياس 1: الترتيب المتنبأ (السيناريو الأساسي)
-        col1.metric(
-            label="الترتيب المتنبأ (بدون تدخل)",
-            value=f"{y_pred_orig:.2f} رتبة",
-            delta="كلما قل الرقم تحسن الأداء",
-            delta_color="off"
-        )
-        
-        # المقياس 2: المكسب المتوقع
-        col2.metric(
-            label="مكسب الترتيب المتوقع (استجابة قوية)",
-            value=f"+{total_gain:.2f} رتبة",
-            delta=f"معامل التآزر (M): {m_synergy:.2f}",
-            delta_color="inverse"
-        )
+            # المقياس 1: الترتيب المتنبأ (السيناريو الأساسي)
+            col1.metric(
+                label="الترتيب المتنبأ (بدون تدخل)",
+                value=f"{y_pred_orig:.2f} رتبة",
+                delta="كلما قل الرقم تحسن الأداء",
+                delta_color="off"
+            )
+            
+            # المقياس 2: المكسب المتوقع
+            col2.metric(
+                label="مكسب الترتيب المتوقع (استجابة قوية)",
+                value=f"+{total_gain:.2f} رتبة",
+                delta=f"معامل التآزر (M): {m_synergy:.2f}",
+                delta_color="inverse"
+            )
 
-        # المقياس 3: الأولوية القصوى للتدخل
-        col3.metric(
-            label="الأولوية التنفيذية (المرتبة 1)",
-            value=priority_1_indicator,
-            delta="الأكثر كفاءة (أثر / تكلفة)",
-            delta_color="off"
-        )
-        
-        st.subheader("مسارات الاستجابة المحتملة")
-        
-        # رسم بياني للسيناريوهات
-        scenario_data = pd.DataFrame({
-            'الاستجابة': ['متنبأ (Baseline)', 'ضعيفة', 'جزئية', 'قوية'],
-            'الترتيب': [y_pred_orig, rank_weak, rank_partial, rank_strong]
-        })
-        
-        st.bar_chart(scenario_data.set_index('الاستجابة').sort_values('الترتيب', ascending=False), height=350)
-
-        # --- قسم التوصيات التفصيلية ---
-        st.header("📝 التوصيات التفصيلية والمؤشرات الضعيفة")
-        st.markdown("---")
-        
-        st.write(f"لتحقيق المكسب المتوقع، يجب التركيز على المؤشرات الخمسة الأضعف:")
-        
-        recommendation_data = []
-        for ind in top_inds:
-            recommendation_data.append({
-                "المؤشر الضعيف": ind,
-                "التوصية المقترحة": recommendations_map.get(ind, 'غير متوفر'),
-                "خطة التنفيذ المقترحة": execution_plan_map.get(ind, 'غير متوفر')
+            # المقياس 3: الأولوية القصوى للتدخل
+            col3.metric(
+                label="الأولوية التنفيذية (المرتبة 1)",
+                value=priority_1_indicator,
+                delta="الأكثر كفاءة (أثر / تكلفة)",
+                delta_color="off"
+            )
+            
+            st.subheader("مسارات الاستجابة المحتملة")
+            
+            # رسم بياني للسيناريوهات
+            scenario_data = pd.DataFrame({
+                'الاستجابة': ['متنبأ (Baseline)', 'ضعيفة', 'جزئية', 'قوية'],
+                'الترتيب': [y_pred_orig, rank_weak, rank_partial, rank_strong]
             })
             
-        df_recs = pd.DataFrame(recommendation_data)
-        st.table(df_recs.set_index('المؤشر الضعيف'))
+            st.bar_chart(scenario_data.set_index('الاستجابة').sort_values('الترتيب', ascending=False), height=350)
+
+            # --- قسم التوصيات التفصيلية ---
+            st.header("📝 التوصيات التفصيلية والمؤشرات الضعيفة")
+            st.markdown("---")
+            
+            st.write(f"لتحقيق المكسب المتوقع، يجب التركيز على المؤشرات الخمسة الأضعف:")
+            
+            recommendation_data = []
+            for ind in top_inds:
+                recommendation_data.append({
+                    "المؤشر الضعيف": ind,
+                    "التوصية المقترحة": recommendations_map.get(ind, 'غير متوفر'),
+                    "خطة التنفيذ المقترحة": execution_plan_map.get(ind, 'غير متوفر')
+                })
+                
+            df_recs = pd.DataFrame(recommendation_data)
+            st.table(df_recs.set_index('المؤشر الضعيف'))
