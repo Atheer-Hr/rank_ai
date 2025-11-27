@@ -3,21 +3,18 @@ import pandas as pd
 import numpy as np
 import joblib
 import tensorflow as tf
-# محاولة استيراد Interpreter، إذا فشل نستخدم tf.lite
-try:
-    from tensorflow.lite.python.interpreter import Interpreter
-except ImportError:
-    from tensorflow.lite import Interpreter
+from tensorflow.lite import Interpreter
 import os
+from typing import Tuple, Dict, Any, List
 
 # ======================================================================
 # -------------------- 1. تحميل الأصول الأساسية (TFLITE) --------------------
 # ======================================================================
 
 @st.cache_resource
-def load_assets_lite():
+def load_assets_lite() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
     
-    # تعريفات القواميس الثابتة (للتوصيات وخطط التنفيذ)
+    # تعريف القواميس الثابتة (Static Dictionaries)
     recommendations_map = {
         "الكفاءة للعنصر البشري": "تطوير برامج تدريبية مستمرة للمعلمين وربطها بتقييم الأداء الفردي.",
         "المناهج": "مراجعة شاملة للمناهج وتحديثها لتتوافق مع مهارات القرن 21.",
@@ -55,41 +52,39 @@ def load_assets_lite():
         "بيئة وتجهيز": {"المرافق التعليمية والمباني","التقنية بالمدارس"}
     }
 
-    # القيم الافتراضية للعودة في حالة الخطأ
     default_return = None, None, None, [], None, None, None, None
 
     try:
-        # 1. تحميل النموذج (TFLite) - موجود في الصورة
+        # 1. تحميل النموذج (Ranking Model)
         if not os.path.exists('ranking_model_lite.tflite'):
-             st.error("❌ ملف 'ranking_model_lite.tflite' غير موجود. يرجى رفعه.")
+             st.error("❌ خطأ: ملف 'ranking_model_lite.tflite' غير موجود. تأكد من وجوده بجانب ملف الكود.")
              return default_return
         
         interpreter = Interpreter(model_path='ranking_model_lite.tflite')
         interpreter.allocate_tensors()
 
-        # 2. تحميل Scalers - موجودة في الصورة
+        # 2. تحميل Scalers
         if not os.path.exists('scaler_X_lite.pkl') or not os.path.exists('scaler_y_lite.pkl'):
-            st.error("❌ ملفات 'scaler_X_lite.pkl' أو 'scaler_y_lite.pkl' مفقودة.")
-            return default_return
+             st.error("❌ خطأ: ملفات الـ Scaler (.pkl) مفقودة.")
+             return default_return
 
         scaler_X = joblib.load('scaler_X_lite.pkl')
         scaler_y = joblib.load('scaler_y_lite.pkl')
         
-        # 3. تحميل أسماء المؤشرات - موجود في الصورة
+        # 3. تحميل أسماء المؤشرات
         if not os.path.exists('indicator_names_lite.txt'):
-             st.error("❌ ملف 'indicator_names_lite.txt' مفقود.")
+             st.error("❌ خطأ: ملف الأسماء 'indicator_names_lite.txt' مفقود.")
              return default_return
 
         with open('indicator_names_lite.txt', 'r', encoding='utf-8') as f:
             indicator_names = [line.strip() for line in f]
             
-        # 4. تحميل خريطة الأهمية (Feature Importance)
-        # هذا الملف غير موجود في الصورة، لذا سنضيف كود احتياطي لإنشائه في الذاكرة
+        # 4. تحميل خريطة الأهمية (مع حل المشكلة إذا كان الملف ناقصاً)
         if os.path.exists('feature_importance_map.pkl'):
             feature_importance_map = joblib.load('feature_importance_map.pkl')
         else:
-            # st.warning("⚠️ ملف 'feature_importance_map.pkl' غير موجود. سيتم استخدام أوزان متساوية.")
-            # إنشاء خريطة افتراضية (وزن 1 للجميع) لتجنب توقف البرنامج
+            # ⚠️ حل المشكلة: إنشاء خريطة افتراضية لأن الملف غير موجود في الصورة
+            st.warning("⚠️ تنبيه: ملف 'feature_importance_map.pkl' غير موجود. يتم استخدام قيم افتراضية للأهمية.")
             feature_importance_map = {name: 1.0 for name in indicator_names}
 
         return interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
@@ -98,7 +93,7 @@ def load_assets_lite():
         st.error(f"⚠️ حدث خطأ أثناء تحميل الملفات: {e}")
         return default_return
 
-# تنفيذ دالة التحميل
+# تنفيذ التحميل
 interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = load_assets_lite()
 
 # دالة التآزر
@@ -112,13 +107,12 @@ def synergy_multiplier(selected_inds, clusters):
 
 
 # ======================================================================
-# -------------------- 2. وظيفة التنبؤ والتحليل --------------------
+# -------------------- 2. وظيفة التنبؤ والتحليل (TFLite) --------------------
 # ======================================================================
 
 def run_prediction_and_analysis(input_values, interpreter, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map):
     
     if interpreter is None:
-        st.warning("النموذج غير جاهز.")
         return None, None, None, None, None, None, None, None
 
     # 1. تجهيز المدخلات
@@ -128,7 +122,7 @@ def run_prediction_and_analysis(input_values, interpreter, scaler_X, scaler_y, i
     try:
         X_scaled = scaler_X.transform(input_array)
     except ValueError as e:
-        st.error(f"خطأ في التطبيع: البيانات المدخلة لا تطابق المتوقع. {e}")
+        st.error(f"خطأ في أبعاد البيانات: {e}")
         return None, None, None, None, None, None, None, None
 
     # 3. التنبؤ
@@ -140,42 +134,37 @@ def run_prediction_and_analysis(input_values, interpreter, scaler_X, scaler_y, i
 
     y_pred_orig = scaler_y.inverse_transform(y_scaled).flatten()[0]
     
-    # 4. تحليل الأولوية (استخراج أسوأ 5 مؤشرات كقيم مطبعة - كلما قلت القيمة زاد الخطر)
-    # ملاحظة: الافتراض هنا أن القيم الأقل في X_scaled تعني أداء أضعف
+    # 4. تحليل المخاطر
     risks_sorted = sorted([(indicator_names[j], X_scaled[0, j]) for j in range(len(indicator_names))], key=lambda x: x[1])
     top_inds = [r[0] for r in risks_sorted[:5]]
 
-    # 5. حساب الأثر والمكاسب
+    # 5. حساب المكاسب
     m_synergy = synergy_multiplier(top_inds, clusters)
     
-    # استخدام .get لتجنب الأخطاء إذا كان الاسم غير موجود في الخريطة
-    importance_sum = sum([feature_importance_map.get(ind, 1.0) for ind in top_inds])
-    
-    # معادلة المكسب التقريبية
-    total_gain = y_pred_orig * 0.05 * importance_sum * m_synergy
+    # استخدام .get لتجنب الأخطاء إذا كان المفتاح غير موجود
+    total_gain = y_pred_orig * 0.1 * sum([feature_importance_map.get(ind, 1.0) for ind in top_inds]) * m_synergy
     
     rank_strong = max(1.0, y_pred_orig - total_gain)
     rank_partial = max(1.0, y_pred_orig - total_gain * 0.6)
     rank_weak = max(1.0, y_pred_orig - total_gain * 0.3)
     
-    # 6. تحديد الأولوية القصوى (Rank 1)
+    # 6. الأولوية
     impact_cost_rows = []
     for ind, norm_val in risks_sorted:
         importance = feature_importance_map.get(ind, 1.0)
-        # كلما قلت القيمة (norm_val) زادت الحاجة للتحسين (1 - val)
         base_component = max(1.0 - float(norm_val), 0.02)
         weight = base_component * importance
         impact_cost_rows.append({
             "المؤشر": ind,
-            "نسبة الأثر إلى التكلفة": weight / 2 # افتراض التكلفة ثابتة = 2
+            "نسبة الأثر إلى التكلفة": weight / 2
         })
-        
     df_impact = pd.DataFrame(impact_cost_rows)
-    if not df_impact.empty:
-        df_impact["ترتيب الأولوية"] = df_impact["نسبة الأثر إلى التكلفة"].rank(ascending=False, method="dense").astype(int)
-        priority_1_indicator = df_impact[df_impact["ترتيب الأولوية"] == 1]['المؤشر'].iloc[0]
-    else:
+    df_impact["ترتيب الأولوية"] = df_impact["نسبة الأثر إلى التكلفة"].rank(ascending=False, method="dense").astype(int)
+    
+    if df_impact.empty:
         priority_1_indicator = "غير محدد"
+    else:
+        priority_1_indicator = df_impact[df_impact["ترتيب الأولوية"] == 1]['المؤشر'].iloc[0]
     
     return y_pred_orig, rank_strong, rank_partial, rank_weak, total_gain, m_synergy, top_inds, priority_1_indicator
 
@@ -187,76 +176,66 @@ def run_prediction_and_analysis(input_values, interpreter, scaler_X, scaler_y, i
 if interpreter is not None and indicator_names:
     st.set_page_config(layout="wide", page_title="منصة مؤشر الترتيب الذكي")
     
-    # تنسيق CSS
     st.markdown("""
         <style>
             .arabic-font { font-family: 'Tahoma', sans-serif; direction: rtl; text-align: right; }
             [data-testid="stSidebar"] { direction: rtl; text-align: right; }
             .big-font { font-size: 30px !important; font-weight: bold; color: #004d99; }
             div[data-testid="stMetricValue"] { direction: rtl; }
-            p, h1, h2, h3 { direction: rtl; text-align: right; }
-            .stDataFrame { direction: rtl; }
+            p, h1, h2, h3 { text-align: right; }
         </style>
     """, unsafe_allow_html=True)
     
     st.markdown('<p class="arabic-font big-font">🚀 منصة مؤشر الترتيب الذكي (AI Prescriptive Agent)</p>', unsafe_allow_html=True)
     st.markdown('<p class="arabic-font">أدخل قيم المؤشرات لعام التنبؤ (2025-2030) واستعرض التوقعات الإحصائية وأولويات التدخل.</p>', unsafe_allow_html=True)
 
-    # --- قسم المدخلات ---
-    st.sidebar.markdown('### ⚙️ أدخل بيانات المؤشرات الـ 12')
-    
+    # --- المدخلات ---
+    st.sidebar.markdown('### ⚙️ أدخل بيانات المؤشرات')
     input_cols = st.sidebar.columns(2)
     input_values = []
     
-    # إنشاء حقول الإدخال بناءً على الأسماء المحملة من الملف
+    # التأكد من أن عدد الأسماء يطابق عدد المدخلات المتوقع
     for i, ind_name in enumerate(indicator_names):
         col = input_cols[i % 2]
         with col:
+            # جعل القيمة الافتراضية تعتمد على الترتيب لتسهيل التجربة
             val = st.slider(f"{ind_name}", 0.0, 100.0, 50.0, key=f"input_{i}")
             input_values.append(val)
 
-    # --- زر التشغيل ---
+    # --- الزر والنتائج ---
     if st.sidebar.button('تحليل التنبؤ والأولويات'):
         
-        # التأكد من عدد المدخلات
-        if len(input_values) != 12:
-            st.error(f"عدد المدخلات غير صحيح. المتوقع 12، تم استلام {len(input_values)}.")
-        else:
-            results = run_prediction_and_analysis(
-                input_values, interpreter, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map
-            )
+        results = run_prediction_and_analysis(
+            input_values, interpreter, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map
+        )
+        
+        if results[0] is not None:
+            y_pred, r_strong, r_partial, r_weak, gain, synergy, top_inds, p1_ind = results
             
-            y_pred_orig, rank_strong, rank_partial, rank_weak, total_gain, m_synergy, top_inds, priority_1_indicator = results
+            st.header("🥇 ملخص النتائج")
+            st.markdown("---")
             
-            if y_pred_orig is not None:
-                # --- لوحة النتائج ---
-                st.header("🥇 ملخص النتائج والتوجيه الاستراتيجي")
-                st.markdown("---")
-                
-                c1, c2, c3 = st.columns(3)
-                c1.metric("الترتيب المتنبأ (Baseline)", f"{y_pred_orig:.2f}", "كلما قل الرقم تحسن الأداء", delta_color="off")
-                c2.metric("مكسب الترتيب المتوقع", f"+{total_gain:.2f}", f"معامل التآزر: {m_synergy:.2f}")
-                c3.metric("الأولوية القصوى للتنفيذ", priority_1_indicator)
-                
-                st.subheader("مسارات الاستجابة المحتملة")
-                
-                chart_data = pd.DataFrame({
-                    'السيناريو': ['الحالي (Baseline)', 'استجابة ضعيفة', 'استجابة جزئية', 'استجابة قوية'],
-                    'الترتيب المتوقع': [y_pred_orig, rank_weak, rank_partial, rank_strong]
-                }).set_index('السيناريو')
-                
-                st.bar_chart(chart_data)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("الترتيب المتنبأ", f"{y_pred:.2f} رتبة")
+            c2.metric("المكسب المتوقع", f"+{gain:.2f}", f"تآزر: {synergy:.2f}")
+            c3.metric("الأولوية القصوى", p1_ind)
+            
+            st.subheader("مسارات الاستجابة")
+            df_chart = pd.DataFrame({
+                'السيناريو': ['الحالي', 'تدخل ضعيف', 'تدخل جزئي', 'تدخل قوي'],
+                'الترتيب': [y_pred, r_weak, r_partial, r_strong]
+            })
+            st.bar_chart(df_chart.set_index('السيناريو'))
 
-                # --- التوصيات ---
-                st.header("📝 التوصيات التفصيلية (لأضعف 5 مؤشرات)")
-                st.markdown("---")
-                
-                rec_rows = []
-                for ind in top_inds:
-                    rec_rows.append({
-                        "المؤشر الضعيف": ind,
-                        "التوصية": recommendations_map.get(ind, 'غير متوفر'),
-                        "خطة التنفيذ": execution_plan_map.get(ind, 'غير متوفر')
-                    })
-                
-                st.table(pd.DataFrame(rec_rows))
+            st.header("📝 التوصيات")
+            recs = []
+            for ind in top_inds:
+                recs.append({
+                    "المؤشر": ind,
+                    "التوصية": recommendations_map.get(ind, '-'),
+                    "الخطة": execution_plan_map.get(ind, '-')
+                })
+            st.table(pd.DataFrame(recs))
+
+elif interpreter is None:
+    st.warning("الرجاء التأكد من وجود جميع ملفات النموذج في نفس المجلد.")
