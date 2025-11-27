@@ -4,26 +4,48 @@ import numpy as np
 import joblib
 import tensorflow as tf
 from tensorflow.keras.models import load_model
+import requests
+import zipfile
+from io import BytesIO
 import os
 
 # ======================================================================
-# -------------------- 1. تحميل الأصول الأساسية --------------------
+# -------------------- 1. تحميل الأصول الآمن والمؤمن --------------------
 # ======================================================================
 
-# استخدام الكاش لتسريع تحميل الأصول
 @st.cache_resource
-def load_assets():
+def load_assets_secure():
+    # 1. جلب رابط التحميل الآمن من مفاتيح السرية (Secrets)
+    if "ASSET_DOWNLOAD_URL" not in st.secrets:
+        st.error("⚠️ فشل: لم يتم العثور على مفتاح ASSET_DOWNLOAD_URL السري. لا يمكن تحميل النموذج.")
+        return None, None, None, [], None, None, None
+
+    ASSET_URL = st.secrets["ASSET_DOWNLOAD_URL"]
+    
+    # 2. تنزيل الملف المضغوط وفك الضغط
     try:
-        # تحميل النموذج و Scalers
+        st.write("تحميل الأصول الهامة...")
+        response = requests.get(ASSET_URL, stream=True)
+        response.raise_for_status() # يتحقق من وجود خطأ في الرابط (مثل 404 أو 403)
+        
+        with zipfile.ZipFile(BytesIO(response.content)) as z:
+            # يفترض أن الملفات (.h5, .pkl, .txt) موجودة داخل model_assets.zip
+            z.extractall(path=".") 
+        st.write("✅ تم تحميل وفك ضغط الأصول بنجاح.")
+    except Exception as e:
+        st.error(f"⚠️ خطأ في التحميل/فك الضغط. تأكد من إعدادات مشاركة Google Drive و صلاحية الرابط. الخطأ: {e}")
+        return None, None, None, [], None, None, None
+
+    # 3. تحميل النموذج والمتغيرات من الملفات التي تم فك ضغطها
+    try:
         model = load_model('ranking_model.h5', compile=False)
         scaler_X = joblib.load('scaler_X.pkl')
         scaler_y = joblib.load('scaler_y.pkl')
         
-        # تحميل أسماء المؤشرات
         with open('indicator_names.txt', 'r', encoding='utf-8') as f:
             indicator_names = [line.strip() for line in f]
 
-        # تعاريف القواميس (يجب نسخها من كودك الأصلي)
+        # 4. تعاريف القواميس الثابتة
         recommendations_map = {
             "الكفاءة للعنصر البشري": "تطوير برامج تدريبية مستمرة للمعلمين وربطها بتقييم الأداء الفردي.",
             "المناهج": "مراجعة شاملة للمناهج وتحديثها لتتوافق مع مهارات القرن 21.",
@@ -39,6 +61,21 @@ def load_assets():
             "الاختبارات المعيارية": "إعداد اختبارات معيارية وطنية لمقارنة الأداء بين المدارس والمناطق."
         }
         
+        execution_plan_map = {
+            "الكفاءة للعنصر البشري": "توزيع برامج تدريبية حسب مستويات المعلمين وربطها بتقييم الأداء السنوي.",
+            "المناهج": "تشكيل لجان مراجعة للمناهج وربط التحديثات بنتائج الاختبارات المعيارية.",
+            "التطور المهني": "تصميم مسارات مهنية فردية مع متابعة فصلية وتقييم تطبيقي.",
+            "تعزيز الشخصية": "تنفيذ أنشطة صفية ولاصفية تعزز القيادة والانضباط الذاتي.",
+            "التقويم التربوي": "إعادة تصميم أدوات التقويم وربطها بمؤشرات الأداء المدرسي.",
+            "الشراكة مع القطاع الخاص": "توقيع اتفاقيات تعاون مع شركات محلية لدعم التدريب والمرافق.",
+            "مشاركة الاسرة": "إطلاق منصة تواصل مع أولياء الأمور وربطها بتقارير الأداء.",
+            "المرافق التعليمية والمباني": "تحديد أولويات الصيانة والتجهيز حسب كثافة الطلاب.",
+            "التقنية بالمدارس": "توزيع الأجهزة وربطها بمنصات تعليمية وتدريب المعلمين عليها.",
+            "قياس الأداء المدرسي": "تطبيق نظام مؤشرات أداء شهري وربطه بالتحفيز الإداري.",
+            "استراتيجيات التدريس": "تدريب المعلمين على التعلم النشط والتقويم التكويني.",
+            "الاختبارات المعيارية": "تصميم اختبارات وطنية موحدة وربط نتائجها بخطط التحسين."
+        }
+        
         clusters = {
             "تعليم": {"استراتيجيات التدريس","المناهج","التطور المهني"},
             "تقييم": {"التقويم التربوي","الاختبارات المعيارية","قياس الأداء المدرسي"},
@@ -46,22 +83,20 @@ def load_assets():
             "بيئة وتجهيز": {"المرافق التعليمية والمباني","التقنية بالمدارس"}
         }
 
-        # تحديد الأوزان (من الجزء 7 في كودك الأصلي)
-        # بما أن الأوزان هي سمة للنموذج، يجب حفظها أو إعادة استخلاصها
-        # سنعتمد على استخراجها من النموذج مباشرة هنا:
+        # 5. استخراج الأهمية (Feature Importance)
         weights = model.layers[0].get_weights()[0]
         importances = np.mean(np.abs(weights), axis=1)
         importances = importances / importances.sum()
         feature_importance_map = {indicator_names[i]: float(importances[i]) for i in range(len(indicator_names))}
 
 
-        return model, scaler_X, scaler_y, indicator_names, recommendations_map, clusters, feature_importance_map
+        return model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
     
     except Exception as e:
-        st.error(f"⚠️ خطأ في تحميل الأصول. تأكد من وجود ملفات: ranking_model.h5, scaler_X.pkl, scaler_y.pkl, indicator_names.txt. الخطأ: {e}")
-        return None, None, None, [], None, None, None
+        st.error(f"⚠️ خطأ في تحميل الأصول (بعد فك الضغط). تأكد من سلامة ملفاتك. الخطأ: {e}")
+        return None, None, None, [], None, None, None, None
 
-model, scaler_X, scaler_y, indicator_names, recommendations_map, clusters, feature_importance_map = load_assets()
+model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = load_assets_secure()
 
 # دالة التآزر (من الجزء 8 في كودك الأصلي)
 def synergy_multiplier(selected_inds, clusters):
@@ -83,26 +118,23 @@ def run_prediction_and_analysis(input_values, model, scaler_X, scaler_y, indicat
     input_array = np.array([input_values]).astype(float)
     
     # 2. التطبيع (Normalization)
-    # يجب تطبيق التطبيع فقط على الـ 12 مؤشرًا المدخلة
     try:
         X_scaled = scaler_X.transform(input_array)
     except ValueError as e:
         st.error(f"خطأ في التطبيع: تأكد من أنك تُدخل 12 قيمة بالضبط. {e}")
-        return None, None, None, None
+        return None, None, None, None, None, None, None, None
 
     # 3. التنبؤ بالترتيب
     y_scaled = model.predict(X_scaled, verbose=0)
     y_pred_orig = scaler_y.inverse_transform(y_scaled).flatten()[0]
     
     # 4. تحليل الأولوية (Top 5 Risks)
-    # نستخدم قيم التطبيع لتحديد المؤشرات الأضعف (القيم الأصغر)
     risks_sorted = sorted([(indicator_names[j], X_scaled[0, j]) for j in range(len(indicator_names))], key=lambda x: x[1])
     top_inds = [r[0] for r in risks_sorted[:5]]
 
     # 5. حساب الأثر والمكاسب (Synergy and Gain)
     m_synergy = synergy_multiplier(top_inds, clusters)
     
-    # حساب المكسب الكلي المتوقع
     total_gain = y_pred_orig * 0.1 * sum([feature_importance_map[ind] for ind in top_inds]) * m_synergy
     
     # حساب سيناريوهات الاستجابة
@@ -111,8 +143,6 @@ def run_prediction_and_analysis(input_values, model, scaler_X, scaler_y, indicat
     rank_weak = max(1.0, y_pred_orig - total_gain * 0.3)
     
     # 6. تحديد المؤشر ذو الأولوية القصوى (Rank 1 from Impact/Cost)
-    
-    # إنشاء مصفوفة الأثر المؤقتة
     impact_cost_rows = []
     for ind, norm_val in risks_sorted:
         importance = feature_importance_map.get(ind, 0.0)
