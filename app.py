@@ -9,63 +9,61 @@ import requests
 import zipfile
 from io import BytesIO 
 import os 
+import tempfile # لإدارة المسارات المؤقتة بشكل أفضل
 
 # ======================================================================
 # -------------------- 1. تحميل الأصول الآمن والمؤمن --------------------
 # ======================================================================
 
-# وظيفة مساعدة لإيجاد المسار الصحيح للملف داخل المجلد المؤقت
-def find_asset_path(base_path, filename):
-    """يبحث عن الملف المحدد في أي مجلد فرعي داخل المسار الأساسي."""
-    for root, _, files in os.walk(base_path):
-        if filename in files:
-            # يعيد المسار الكامل للملف
-            return os.path.join(root, filename)
-    return None
+# وظيفة مساعدة لفك الضغط الآمن
+def extract_assets_from_zip(zip_content, base_path):
+    """تستخلص الملفات من محتوى الـ ZIP إلى مسار محدد."""
+    try:
+        with zipfile.ZipFile(BytesIO(zip_content)) as z:
+            z.extractall(path=base_path)
+        return True
+    except Exception as e:
+        st.error(f"خطأ في فك الضغط: {e}")
+        return False
 
-@st.cache_resource
+# @st.cache_data: يتميز بكونه أكثر أمانًا للملفات الكبيرة من @st.cache_resource
+@st.cache_data(show_spinner="جاري تحميل النماذج والمطبّعات بشكل آمن...")
 def load_assets_secure():
     # تعريف القيم الافتراضية للتعامل مع أي فشل
     default_return = None, None, None, [], None, None, None, None
 
-    # 1. جلب رابط التحميل الآمن من مفاتيح السرية (Secrets)
     if "ASSET_DOWNLOAD_URL" not in st.secrets:
-        st.error("⚠️ فشل: لم يتم العثور على مفتاح ASSET_DOWNLOAD_URL السري. لا يمكن تحميل النموذج.")
         return default_return
 
     ASSET_URL = st.secrets["ASSET_DOWNLOAD_URL"]
     
-    # 2. تنزيل الملف المضغوط وفك الضغط
-    BASE_PATH = "./temp_assets/"
+    # 1. تنزيل الملف المضغوط (يتم تنزيله في الذاكرة)
     try:
-        st.write("تحميل الأصول الهامة...")
         response = requests.get(ASSET_URL, stream=True)
         response.raise_for_status() 
-        
-        # إنشاء المجلد المؤقت وفك الضغط
-        os.makedirs(BASE_PATH, exist_ok=True) 
-        
-        with zipfile.ZipFile(BytesIO(response.content)) as z:
-            z.extractall(path=BASE_PATH) 
-        st.write("✅ تم تحميل وفك ضغط الأصول بنجاح.")
-
+        zip_content = response.content
     except Exception as e:
-        st.error(f"⚠️ خطأ في التحميل/فك الضغط (الخطوة 2). تحقق من إعدادات مشاركة Google Drive وصلاحية الرابط. الخطأ: {e}")
+        st.error(f"⚠️ فشل التحميل من Google Drive. تحقق من صلاحية الرابط: {e}")
         return default_return
 
-    # 3. تحميل النموذج والمتغيرات من الملفات التي تم فك ضغطها
+    # 2. إنشاء مسار مؤقت محدد
+    BASE_PATH = tempfile.mkdtemp() + "/"
+    
+    # 3. فك الضغط (استخدام وظيفة مساعدة)
+    if not extract_assets_from_zip(zip_content, BASE_PATH):
+        return default_return
+        
+    # 4. تحديد المسارات وتحميل الأصول (البحث المرن ضروري هنا)
     try:
-        # استخدام وظيفة البحث المرن للعثور على المسار الصحيح للملفات الأربعة
+        
+        # استخدام البحث المرن (find_asset_path) لتحديد موقع الملفات داخل المسار المؤقت
         model_path = find_asset_path(BASE_PATH, 'ranking_model.h5')
         scaler_X_path = find_asset_path(BASE_PATH, 'scaler_X.pkl')
         scaler_y_path = find_asset_path(BASE_PATH, 'scaler_y.pkl')
         indicators_path = find_asset_path(BASE_PATH, 'indicator_names.txt')
 
-        # التحقق من أن جميع المسارات موجودة
         if not all([model_path, scaler_X_path, scaler_y_path, indicators_path]):
             st.error("⚠️ فشل: لم يتم العثور على أحد ملفات الأصول الأساسية داخل الـ ZIP.")
-            # إرجاع تفاصيل لمساعدة المستخدم في التشخيص
-            st.write(f"المسارات التي تم البحث عنها: [Model: {model_path}, Scaler_X: {scaler_X_path}, Indicators: {indicators_path}]")
             return default_return
 
         # تحميل الأصول
@@ -76,7 +74,7 @@ def load_assets_secure():
         with open(indicators_path, 'r', encoding='utf-8') as f:
             indicator_names = [line.strip() for line in f]
 
-        # 4. تعاريف القواميس الثابتة (لضمان أنها متاحة بعد التحميل)
+        # 5. تعاريف القواميس الثابتة (لضمان أنها متاحة)
         recommendations_map = {
             "الكفاءة للعنصر البشري": "تطوير برامج تدريبية مستمرة للمعلمين وربطها بتقييم الأداء الفردي.",
             "المناهج": "مراجعة شاملة للمناهج وتحديثها لتتوافق مع مهارات القرن 21.",
@@ -114,18 +112,17 @@ def load_assets_secure():
             "بيئة وتجهيز": {"المرافق التعليمية والمباني","التقنية بالمدارس"}
         }
 
-        # 5. استخراج الأهمية (Feature Importance)
+        # 6. استخراج الأهمية (Feature Importance)
         weights = model.layers[0].get_weights()[0]
         importances = np.mean(np.abs(weights), axis=1)
         importances = importances / importances.sum()
         feature_importance_map = {indicator_names[i]: float(importances[i]) for i in range(len(indicator_names))}
 
-        # نرجع القيم التي تم تحميلها بنجاح
         return model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
     
     except Exception as e:
         # إذا حدث خطأ في التحميل من المسار المؤقت، نظهر الخطأ للمستخدم
-        st.error(f"⚠️ خطأ في تحميل الأصول (بعد فك الضغط). تأكد من سلامة ملفاتك. الخطأ: {e}")
+        st.error(f"⚠️ خطأ في تحميل الأصول (بعد فك الضغط). الخطأ: {e}")
         return default_return
 
 # يجب استدعاء الدالة الجديدة هنا:
