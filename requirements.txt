@@ -2,4 +2,6 @@ streamlit
 pandas
 numpy
 joblib
-tensorflow
+tensorflow-cpu
+scikit-learn
+openpyxl
