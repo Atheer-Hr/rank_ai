@@ -5,16 +5,17 @@ import joblib
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 import os
-from typing import Tuple, Dict, Any, List # لتعريف الأنواع
+from typing import Tuple, Dict, Any, List # Defining types for clarity
 
 # ======================================================================
-# -------------------- 1. تحميل الأصول الأساسية (مباشر) --------------------
+# -------------------- 1. LOAD ESSENTIAL ASSETS (DIRECT) --------------------
 # ======================================================================
 
-# @st.cache_resource: يستخدم للتحميل مرة واحدة فقط
+# @st.cache_resource is used to load the model only once
 @st.cache_resource
 def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
-    # تحديد القواميس الثابتة (لضمان أنها متاحة دائماً)
+    
+    # Static definitions (Dictionaries)
     recommendations_map = {
         "الكفاءة للعنصر البشري": "تطوير برامج تدريبية مستمرة للمعلمين وربطها بتقييم الأداء الفردي.",
         "المناهج": "مراجعة شاملة للمناهج وتحديثها لتتوافق مع مهارات القرن 21.",
@@ -52,16 +53,17 @@ def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
         "بيئة وتجهيز": {"المرافق التعليمية والمباني","التقنية بالمدارس"}
     }
 
-    # القيمة الافتراضية للفشل
+    # Default value for failure
     default_return = None, None, None, [], None, None, None, None
 
     try:
-        # التحقق من وجود الملفات
+        # 1. CHECK FILE EXISTENCE
         if not os.path.exists('ranking_model.h5'):
              st.error("❌ فشل: لم يتم العثور على ملف 'ranking_model.h5'. تأكد من رفع الملف للمستودع.")
              return default_return
         
-        # التحميل مباشرة من المسار المحلي (المستودع العام)
+        # 2. LOAD ASSETS DIRECTLY
+        # Keras model loading (the potential bottleneck for memory)
         model = load_model('ranking_model.h5', compile=False)
         scaler_X = joblib.load('scaler_X.pkl')
         scaler_y = joblib.load('scaler_y.pkl')
@@ -69,7 +71,7 @@ def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
         with open('indicator_names.txt', 'r', encoding='utf-8') as f:
             indicator_names = [line.strip() for line in f]
 
-        # استخلاص أوزان الأهمية (Feature Importance)
+        # 3. FEATURE IMPORTANCE EXTRACTION
         weights = model.layers[0].get_weights()[0]
         importances = np.mean(np.abs(weights), axis=1)
         importances = importances / importances.sum()
@@ -78,14 +80,14 @@ def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
         return model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
     
     except Exception as e:
-        # في حالة الفشل، نظهر رسالة واضحة للمستخدم
-        st.error(f"⚠️ فشل تحميل الأصول. تأكد من أن الملفات الأربعة (.h5, .pkl, .txt) موجودة في المستودع بجانب app.py. الخطأ: {e}")
-        st.error(f"تلميح: قد يكون حجم ملف .h5 أكبر من اللازم للتحميل.")
+        # General failure message (usually memory limit exceeded for .h5)
+        st.error(f"⚠️ فشل تحميل الأصول. تأكد من أن الملفات الأربعة (.h5, .pkl, .txt) موجودة في المستودع بجانب app.py.")
+        st.error(f"تلميح: إذا كان حجم ملف 'ranking_model.h5' كبيرًا (أكثر من 50 ميجا)، فقد تكون الذاكرة المتاحة غير كافية.")
         return default_return
 
 model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = load_assets_direct()
 
-# دالة التآزر (من الجزء 8 في كودك الأصلي)
+# Synergy function (from user's original code)
 def synergy_multiplier(selected_inds, clusters):
     selected = set(selected_inds)
     hits = {c: len(selected & members) for c, members in clusters.items()}
@@ -96,45 +98,45 @@ def synergy_multiplier(selected_inds, clusters):
 
 
 # ======================================================================
-# -------------------- 2. وظيفة التنبؤ والتحليل --------------------
+# -------------------- 2. PREDICTION AND ANALYSIS FUNCTION --------------------
 # ======================================================================
 
 def run_prediction_and_analysis(input_values, model, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map):
     
-    # تحقق من وجود النموذج قبل التشغيل
+    # Check if model loaded successfully
     if model is None:
         st.warning("النموذج غير جاهز بسبب خطأ في التحميل. يرجى مراجعة رسائل الخطأ.")
         return None, None, None, None, None, None, None, None
 
-    # 1. تجهيز المدخلات
+    # 1. Prepare Inputs
     input_array = np.array([input_values]).astype(float)
     
-    # 2. التطبيع (Normalization)
+    # 2. Normalization
     try:
         X_scaled = scaler_X.transform(input_array)
     except ValueError as e:
         st.error(f"خطأ في التطبيع: تأكد من أنك تُدخل 12 قيمة بالضبط. {e}")
         return None, None, None, None, None, None, None, None
 
-    # 3. التنبؤ بالترتيب
+    # 3. Prediction
     y_scaled = model.predict(X_scaled, verbose=0)
     y_pred_orig = scaler_y.inverse_transform(y_scaled).flatten()[0]
     
-    # 4. تحليل الأولوية (Top 5 Risks)
+    # 4. Priority Analysis (Top 5 Risks)
     risks_sorted = sorted([(indicator_names[j], X_scaled[0, j]) for j in range(len(indicator_names))], key=lambda x: x[1])
     top_inds = [r[0] for r in risks_sorted[:5]]
 
-    # 5. حساب الأثر والمكاسب (Synergy and Gain)
+    # 5. Calculate Synergy and Gain
     m_synergy = synergy_multiplier(top_inds, clusters)
     
     total_gain = y_pred_orig * 0.1 * sum([feature_importance_map[ind] for ind in top_inds]) * m_synergy
     
-    # حساب سيناريوهات الاستجابة
+    # Calculate response scenarios
     rank_strong = max(1.0, y_pred_orig - total_gain)
     rank_partial = max(1.0, y_pred_orig - total_gain * 0.6)
     rank_weak = max(1.0, y_pred_orig - total_gain * 0.3)
     
-    # 6. تحديد المؤشر ذو الأولوية القصوى (Rank 1 from Impact/Cost)
+    # 6. Determine Rank 1 Indicator (Impact/Cost)
     impact_cost_rows = []
     for ind, norm_val in risks_sorted:
         importance = feature_importance_map.get(ind, 0.0)
@@ -142,24 +144,28 @@ def run_prediction_and_analysis(input_values, model, scaler_X, scaler_y, indicat
         weight = base_component * importance
         impact_cost_rows.append({
             "المؤشر": ind,
-            "نسبة الأثر إلى التكلفة": weight / 2 # التكلفة ثابتة (2)
+            "نسبة الأثر إلى التكلفة": weight / 2 # Cost is fixed at 2
         })
     df_impact = pd.DataFrame(impact_cost_rows)
     df_impact["ترتيب الأولوية"] = df_impact["نسبة الأثر إلى التكلفة"].rank(ascending=False, method="dense").astype(int)
     
-    priority_1_indicator = df_impact[df_impact["ترتيب الأولوية"] == 1]['المؤشر'].iloc[0]
+    # Handle case where DataFrame is empty (should not happen, but safe)
+    if df_impact.empty:
+        priority_1_indicator = "غير محدد"
+    else:
+        priority_1_indicator = df_impact[df_impact["ترتيب الأولوية"] == 1]['المؤشر'].iloc[0]
     
     return y_pred_orig, rank_strong, rank_partial, rank_weak, total_gain, m_synergy, top_inds, priority_1_indicator
 
 
 # ======================================================================
-# -------------------- 3. واجهة Streamlit --------------------
+# -------------------- 3. STREAMLIT INTERFACE --------------------
 # ======================================================================
 
-if model and indicator_names:
+if model is not None and indicator_names:
     st.set_page_config(layout="wide", page_title="منصة مؤشر الترتيب الذكي")
     
-    # CSS لتخصيص الخط العربي
+    # CSS for Arabic styling
     st.markdown("""
         <style>
             .arabic-font {
@@ -185,36 +191,35 @@ if model and indicator_names:
     st.markdown('<p class="arabic-font big-font">🚀 منصة مؤشر الترتيب الذكي (AI Prescriptive Agent)</p>', unsafe_allow_html=True)
     st.markdown('<p class="arabic-font">أدخل قيم المؤشرات لعام التنبؤ (2025-2030) واستعرض التوقعات الإحصائية وأولويات التدخل.</p>', unsafe_allow_html=True)
 
-    # --- قسم المدخلات ---
+    # --- Input Section ---
     st.sidebar.markdown('<p class="arabic-font">⚙️ أدخل بيانات المؤشرات الـ 12</p>', unsafe_allow_html=True)
     
     input_cols = st.sidebar.columns(2)
     input_values = []
     
-    # إنشاء حقول الإدخال الـ 12
+    # Create 12 input sliders
     for i, ind_name in enumerate(indicator_names):
         col = input_cols[i % 2]
-        # استخدام الحد الأدنى والحد الأقصى كنطاق لـ slider (افتراضًا من 0 إلى 100)
-        # يمكن تعديل النطاق بناءً على القيم الحقيقية لبياناتك
+        # Assuming values range from 0 to 100
         val = col.slider(f"{ind_name} (0-100)", 0.0, 100.0, 50.0, key=f"input_{i}")
         input_values.append(val)
 
-    # --- تشغيل التحليل ---
+    # --- Run Analysis ---
     if st.sidebar.button('تحليل التنبؤ والأولويات'):
         
         y_pred_orig, rank_strong, rank_partial, rank_weak, total_gain, m_synergy, top_inds, priority_1_indicator = run_prediction_and_analysis(
             input_values, model, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map
         )
         
-        # إذا كانت هناك قيم مخرجة (لم يحدث خطأ في run_prediction_and_analysis)
+        # Display results only if prediction was successful
         if y_pred_orig is not None:
-            # --- قسم لوحة القيادة (Dashboard) ---
+            # --- Dashboard Section ---
             st.header("🥇 ملخص النتائج والتوجيه الاستراتيجي")
             st.markdown("---")
             
             col1, col2, col3 = st.columns(3)
 
-            # المقياس 1: الترتيب المتنبأ (السيناريو الأساسي)
+            # Metric 1: Baseline Prediction
             col1.metric(
                 label="الترتيب المتنبأ (بدون تدخل)",
                 value=f"{y_pred_orig:.2f} رتبة",
@@ -222,7 +227,7 @@ if model and indicator_names:
                 delta_color="off"
             )
             
-            # المقياس 2: المكسب المتوقع
+            # Metric 2: Expected Gain
             col2.metric(
                 label="مكسب الترتيب المتوقع (استجابة قوية)",
                 value=f"+{total_gain:.2f} رتبة",
@@ -230,7 +235,7 @@ if model and indicator_names:
                 delta_color="inverse"
             )
 
-            # المقياس 3: الأولوية القصوى للتدخل
+            # Metric 3: Top Priority
             col3.metric(
                 label="الأولوية التنفيذية (المرتبة 1)",
                 value=priority_1_indicator,
@@ -240,7 +245,7 @@ if model and indicator_names:
             
             st.subheader("مسارات الاستجابة المحتملة")
             
-            # رسم بياني للسيناريوهات
+            # Scenario Bar Chart
             scenario_data = pd.DataFrame({
                 'الاستجابة': ['متنبأ (Baseline)', 'ضعيفة', 'جزئية', 'قوية'],
                 'الترتيب': [y_pred_orig, rank_weak, rank_partial, rank_strong]
@@ -248,7 +253,7 @@ if model and indicator_names:
             
             st.bar_chart(scenario_data.set_index('الاستجابة').sort_values('الترتيب', ascending=False), height=350)
 
-            # --- قسم التوصيات التفصيلية ---
+            # --- Detailed Recommendations Section ---
             st.header("📝 التوصيات التفصيلية والمؤشرات الضعيفة")
             st.markdown("---")
             
