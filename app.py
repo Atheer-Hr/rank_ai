@@ -20,6 +20,8 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700&display=swap');
     html, body, [class*="css"] { font-family: 'Tajawal', sans-serif; direction: rtl; }
     h1 { color: #2c3e50; text-align: center; margin-bottom: 0; }
+    
+    /* بطاقات المعلومات */
     .metric-card {
         background-color: #fff; border: 1px solid #e0e0e0; border-radius: 12px;
         padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); text-align: center;
@@ -29,8 +31,11 @@ st.markdown("""
     .metric-value { font-size: 26px; font-weight: bold; color: #2c3e50; }
     .metric-label { font-size: 14px; color: #7f8c8d; margin-bottom: 5px; }
     .metric-icon { font-size: 30px; margin-bottom: 10px; }
+    
+    /* التبويبات */
     .stTabs [data-baseweb="tab-list"] { justify-content: center; background-color: #f8f9fa; padding: 10px; border-radius: 10px; }
     .stTabs [aria-selected="true"] { background-color: #e3f2fd !important; color: #1565c0 !important; font-weight: bold; }
+    
     div[data-testid="stDataFrame"] { width: 100%; }
 </style>
 """, unsafe_allow_html=True)
@@ -136,7 +141,7 @@ interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, execution
 
 def forecast_future_var(df_history, target_years, indicators):
     """
-    التنبؤ بقيم المؤشرات باستخدام VAR Model كما في منهجيتك.
+    التنبؤ بقيم المؤشرات باستخدام VAR Model.
     """
     data_hist = df_history[indicators].dropna()
     n_samples, n_features = data_hist.shape
@@ -148,14 +153,14 @@ def forecast_future_var(df_history, target_years, indicators):
     prediction_results = None
     
     try:
-        # محاولة استخدام VAR (الأدق للعلاقات المتداخلة)
+        # محاولة استخدام VAR
         if n_samples > n_features + 2: 
             model = VAR(data_hist)
             results = model.fit(maxlags=1)
             lag_order = results.k_ar
             prediction_results = results.forecast(data_hist.values[-lag_order:], steps=steps)
         else:
-            # استخدام AR كبديل قوي إذا كانت البيانات قليلة
+            # استخدام AR كبديل
             temp_preds = []
             for col in indicators:
                 series = data_hist[col].values
@@ -166,7 +171,7 @@ def forecast_future_var(df_history, target_years, indicators):
             prediction_results = np.column_stack(temp_preds)
             
     except Exception:
-        # البديل الأخير في حال فشل النماذج الإحصائية
+        # البديل الأخير
         temp_preds = []
         X_years = df_history['السنة'].values.reshape(-1, 1)
         future_X = np.array([[last_year + i] for i in range(1, steps + 1)])
@@ -176,7 +181,7 @@ def forecast_future_var(df_history, target_years, indicators):
             temp_preds.append(pred)
         prediction_results = np.column_stack(temp_preds)
 
-    # إضافة تذبذب طبيعي (Noise) بسيط لمحاكاة الواقع
+    # إضافة تذبذب طبيعي بسيط
     np.random.seed(42)
     noise = np.random.uniform(-1.5, 1.5, size=prediction_results.shape)
     prediction_results += noise
@@ -197,7 +202,7 @@ def forecast_future_var(df_history, target_years, indicators):
 
 def run_neural_network_ranking(input_values, interpreter, scaler_X, scaler_y):
     """
-    استخدام نموذجك العصبي (TFLite) للتنبؤ بالترتيب بناءً على المؤشرات
+    استخدام نموذجك العصبي (TFLite) للتنبؤ بالترتيب.
     """
     input_array = np.array([input_values]).astype(np.float32)
     X_scaled = scaler_X.transform(input_array)
@@ -212,10 +217,7 @@ def run_neural_network_ranking(input_values, interpreter, scaler_X, scaler_y):
 
 def calculate_full_analysis(df_forecast, interpreter, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map):
     """
-    التحليل الهجين:
-    1. القيم من VAR
-    2. الترتيب من NN
-    3. ديناميكية التوصيات عبر Feedback Loop
+    التحليل الهجين + Feedback Loop لتغيير التوصيات.
     """
     
     results_list = []
@@ -223,7 +225,7 @@ def calculate_full_analysis(df_forecast, interpreter, scaler_X, scaler_y, indica
     impact_matrix_list = []
     dynamic_recs_list = []
     
-    # مصفوفة التحسين التراكمي (لتغيير التوصيات سنوياً)
+    # مصفوفة التحسين التراكمي
     accumulated_improvements = {name: 0.0 for name in indicator_names}
     
     for i, row in df_forecast.iterrows():
@@ -250,11 +252,11 @@ def calculate_full_analysis(df_forecast, interpreter, scaler_X, scaler_y, indica
         top_5_risks = risks_sorted[:5] 
         top_inds_names = [r[0] for r in top_5_risks]
         
-        # 4. Feedback Loop: تحسين المؤشرات الضعيفة للسنة القادمة
+        # 4. Feedback Loop: تحسين المؤشرات الضعيفة للسنة القادمة (سد الفجوة)
         for weak_ind in top_inds_names:
-            accumulated_improvements[weak_ind] += 12.0 # دفعة تحسين لتغيير الأولويات مستقبلاً
+            accumulated_improvements[weak_ind] += 12.0 
             
-        # 5. الحسابات (التآزر والمكاسب)
+        # 5. الحسابات
         selected_set = set(top_inds_names)
         hits = {c: len(selected_set & members) for c, members in clusters.items()}
         m_synergy = min(1.0 + (sum(1 for v in hits.values() if v >= 2) * 0.08), 1.25)
