@@ -41,12 +41,22 @@ def load_assets_secure():
         st.write("✅ تم تحميل وفك ضغط الأصول بنجاح.")
 
     except Exception as e:
-        st.error(f"⚠️ خطأ في التحميل/فك الضغط. تحقق من إعدادات مشاركة Google Drive وصلاحية الرابط. الخطأ: {e}")
+        # إذا فشل التحميل، نرجع سبب الفشل في رسالة واضحة
+        st.error(f"⚠️ خطأ في التحميل/فك الضغط (الخطوة 2). تحقق من إعدادات مشاركة Google Drive وصلاحية الرابط. الخطأ: {e}")
         return default_return
 
     # 3. تحميل النموذج والمتغيرات من الملفات التي تم فك ضغطها
     try:
         # يجب الآن القراءة من المسار المؤقت (BASE_PATH)
+        # إذا كانت الملفات داخل مجلد آخر داخل الـ zip (مثلاً: model_assets/ranking_model.h5)
+        # فقد تحتاج إلى تعديل BASE_PATH
+        
+        # [التصحيح الرئيسي] التأكد من وجود الملفات في المسار المؤقت
+        if not os.path.exists(BASE_PATH + 'ranking_model.h5'):
+            # هذا يحدث إذا كانت الملفات مضغوطة داخل مجلد فرعي داخل ملف الـ ZIP
+            st.warning("⚠️ الملف ranking_model.h5 غير موجود مباشرة في المسار. تأكد من أن الملفات ليست داخل مجلد فرعي داخل الـ ZIP.")
+            # هنا قد تحتاج إلى محاولة تحديد مسار بديل إذا كانت الملفات داخل مجلد (مثلاً: BASE_PATH + 'model_assets/')
+            
         model = load_model(BASE_PATH + 'ranking_model.h5', compile=False)
         scaler_X = joblib.load(BASE_PATH + 'scaler_X.pkl')
         scaler_y = joblib.load(BASE_PATH + 'scaler_y.pkl')
