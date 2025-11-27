@@ -26,7 +26,7 @@ except ImportError:
 # ======================================================================
 @st.cache_resource
 def load_assets_lite():
-    # القواميس (التوصيات والخطط)
+    # القواميس
     recommendations_map = {
         "الكفاءة للعنصر البشري": "تطوير برامج تدريبية مستمرة للمعلمين وربطها بتقييم الأداء الفردي.",
         "المناهج": "مراجعة شاملة للمناهج وتحديثها لتتوافق مع مهارات القرن 21.",
@@ -73,7 +73,7 @@ def load_assets_lite():
 
 loaded_assets = load_assets_lite()
 if loaded_assets is None:
-    st.error("⚠️ الملفات الأساسية مفقودة. تأكد من رفع ملفات النموذج (.tflite, .pkl).")
+    st.error("⚠️ الملفات الأساسية مفقودة. تأكد من رفع ملفات النموذج.")
     st.stop()
 
 interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, clusters, feature_importance_map = loaded_assets
@@ -83,47 +83,41 @@ interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, clusters,
 # ======================================================================
 
 def forecast_future_values(df_history, target_year, indicators):
-    """ التنبؤ (Prediction): الخطوة الأولى في PARTS """
+    """ التنبؤ بقيم المؤشرات لسنة محددة بناءً على البيانات التاريخية """
     row_data = {}
     years_train = df_history['السنة'].values.reshape(-1, 1)
     
     for col in indicators:
         if col in df_history.columns:
+            # تدريب نموذج خطي لكل مؤشر لاكتشاف الـ Trend
             model = LinearRegression()
             y_train = df_history[col].values
             model.fit(years_train, y_train)
             predicted_val = model.predict([[target_year]])[0]
             row_data[col] = max(0.0, min(100.0, predicted_val))
         else:
-            # قيمة متوسطة لتجنب الأخطاء في حال عدم وجود العمود
-            row_data[col] = 50.0 
+            row_data[col] = 50.0 # قيمة افتراضية
     return row_data
 
 def run_ai_model(input_values_dict, interpreter, scaler_X, scaler_y, indicator_names):
-    """ تشغيل النموذج (AI-Driven) """
+    """ تشغيل نموذج الذكاء الاصطناعي للحصول على الترتيب """
     values_list = [input_values_dict[name] for name in indicator_names]
     input_array = np.array([values_list]).astype(np.float32)
     
-    # 1. التطبيع
     X_scaled = scaler_X.transform(input_array)
     
-    # 2. التنبؤ
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
     interpreter.set_tensor(input_details[0]['index'], X_scaled)
     interpreter.invoke()
     y_scaled = interpreter.get_tensor(output_details[0]['index'])
     
-    # 3. عكس التطبيع
     rank = scaler_y.inverse_transform(y_scaled).flatten()[0]
-    
-    # ضمان عدم ظهور أرقام سالبة أو غير منطقية
     return max(1.0, rank)
 
 def calculate_synergy(current_inputs, indicator_names, clusters):
-    """ حساب التآزر (Synergy) """
+    """ حساب التآزر والمؤشرات الضعيفة """
     weak_inds = [name for name in indicator_names if current_inputs[name] < 60]
-    
     hits = {c: len(set(weak_inds) & members) for c, members in clusters.items()}
     boost = 1.0 + (sum(1 for v in hits.values() if v >= 2) * 0.08)
     return min(boost, 1.25), weak_inds
@@ -140,13 +134,14 @@ st.markdown("""
         .stSlider > div { direction: rtl; }
         h1, h2, h3, p, div { text-align: right; font-family: 'Tahoma'; }
         div[data-testid="stMetricValue"] { direction: rtl; }
+        .stTabs [data-baseweb="tab-list"] { justify-content: flex-end; }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("🚀 نظام التنبؤ والمحاكاة الهجين (Hybrid PARTS Model)")
 st.markdown("---")
 
-# --- 1. القسم الأول: البيانات (Data Input) ---
+# --- 1. البيانات والإعدادات ---
 st.sidebar.header("📂 1. البيانات التاريخية")
 uploaded_file = st.sidebar.file_uploader("ارفع ملف Excel (السنوات السابقة)", type=["xlsx"])
 
@@ -158,81 +153,79 @@ if uploaded_file is not None:
         st.stop()
         
     last_year = int(df_history['السنة'].max())
-    target_year = st.sidebar.selectbox("اختر سنة التنبؤ المستهدفة:", [last_year + i for i in range(1, 6)])
     
-    # --- التنبؤ الأولي (Forecast Baseline) ---
-    forecasted_values = forecast_future_values(df_history, target_year, indicator_names)
+    # === التعديل هنا: السماح باختيار عدة سنوات + نطاق مفتوح (10 سنوات) ===
+    future_years_options = [last_year + i for i in range(1, 11)]
+    selected_years = st.sidebar.multiselect(
+        "اختر السنوات المستقبلية للتنبؤ بها:",
+        options=future_years_options,
+        default=[last_year + 1]
+    )
     
-    # --- 2. القسم الثاني: المحاكاة والتآزر (Simulation & Synergy) ---
-    st.header(f"🎛️ لوحة المحاكاة التفاعلية لسنة {target_year}")
-    st.info("💡 **المرحلة الهجينة:** القيم أدناه تم التنبؤ بها آلياً (AI Prediction). يمكنك الآن تعديلها يدوياً (Simulation) لرؤية أثر القرارات.")
+    if not selected_years:
+        st.warning("الرجاء اختيار سنة واحدة على الأقل.")
+        st.stop()
+
+    st.header("📊 النتائج والمحاكاة (PARTS Simulator)")
     
-    col_sim, col_results = st.columns([1, 2])
+    # إنشاء تبويبات (Tabs) لكل سنة مختارة
+    tabs = st.tabs([str(year) for year in selected_years])
     
-    # >> عمود المحاكاة (Sliders)
-    with col_sim:
-        st.markdown("### 🔧 ضبط المؤشرات (Simulation)")
-        user_inputs = {}
-        for name in indicator_names:
-            default_val = float(forecasted_values[name])
-            user_inputs[name] = st.slider(f"{name}", 0.0, 100.0, default_val, key=name)
+    for i, target_year in enumerate(selected_years):
+        with tabs[i]:
+            st.markdown(f"### 🗓️ محاكاة سنة {target_year}")
             
-            diff = user_inputs[name] - default_val
-            if diff != 0:
-                st.caption(f"تغيير عن التنبؤ: {diff:+.1f}%")
-
-    # >> عمود النتائج (Results)
-    with col_results:
-        # تشغيل النموذج
-        current_rank = run_ai_model(user_inputs, interpreter, scaler_X, scaler_y, indicator_names)
-        baseline_rank = run_ai_model(forecasted_values, interpreter, scaler_X, scaler_y, indicator_names)
-        
-        # حساب التآزر
-        synergy_factor, weak_inds = calculate_synergy(user_inputs, indicator_names, clusters)
-        
-        st.markdown("### 📊 النتائج والتشخيص (Analysis & Diagnosis)")
-        
-        m1, m2, m3 = st.columns(3)
-        m1.metric("الترتيب المتوقع", f"{current_rank:.2f}")
-        m2.metric("معامل التآزر (Synergy)", f"{synergy_factor:.2f}x")
-        m3.metric("عدد المؤشرات الحرجة", f"{len(weak_inds)}")
-        
-        # --- الرسم البياني (تم الإصلاح هنا) ---
-        st.markdown("#### 📈 أثر المحاكاة على الترتيب")
-        
-        # جعل البيانات في أعمدة منفصلة لتلوينها بشكل صحيح
-        chart_data = pd.DataFrame({
-            "التنبؤ الأصلي (Baseline)": [baseline_rank],
-            "المحاكاة الحالية (Simulation)": [current_rank]
-        })
-        
-        st.bar_chart(chart_data, color=["#FF5722", "#4CAF50"])
-        
-        # رسالة التقييم
-        if current_rank < baseline_rank:
-            st.success(f"✅ محاكاتك أدت إلى تحسين الترتيب بمقدار {baseline_rank - current_rank:.2f} نقطة!")
-        elif current_rank > baseline_rank:
-            st.warning(f"⚠️ التعديلات الحالية أدت لتراجع الترتيب بمقدار {current_rank - baseline_rank:.2f} نقطة.")
-
-        # التوصيات
-        st.markdown("### 💡 التوصيات الذكية (Recommendations)")
-        if weak_inds:
-            recs = []
-            for ind in weak_inds:
-                recs.append({
-                    "المؤشر": ind,
-                    "التوصية": recommendations_map.get(ind, "مراجعة الخطة التشغيلية"),
-                    "الأهمية": f"{feature_importance_map.get(ind, 0.5):.2f}"
+            # 1. التنبؤ الأولي لهذه السنة (Forecast Baseline)
+            forecasted_values = forecast_future_values(df_history, target_year, indicator_names)
+            
+            col_sim, col_results = st.columns([1, 2])
+            
+            # >> عمود المحاكاة (Sliders)
+            with col_sim:
+                st.info("🔧 اضبط المؤشرات (Simulation)")
+                user_inputs = {}
+                for name in indicator_names:
+                    default_val = float(forecasted_values[name])
+                    # مفتاح فريد لكل سنة لتجنب تداخل السلايدر
+                    slider_key = f"{name}_{target_year}"
+                    
+                    user_inputs[name] = st.slider(
+                        f"{name}", 0.0, 100.0, default_val, key=slider_key
+                    )
+            
+            # >> عمود النتائج (Results)
+            with col_results:
+                # تشغيل النموذج
+                current_rank = run_ai_model(user_inputs, interpreter, scaler_X, scaler_y, indicator_names)
+                baseline_rank = run_ai_model(forecasted_values, interpreter, scaler_X, scaler_y, indicator_names)
+                
+                # حساب التآزر
+                synergy_factor, weak_inds = calculate_synergy(user_inputs, indicator_names, clusters)
+                
+                # عرض النتائج
+                m1, m2, m3 = st.columns(3)
+                m1.metric("الترتيب المتوقع", f"{current_rank:.2f}")
+                m2.metric("معامل التآزر", f"{synergy_factor:.2f}x")
+                m3.metric("مؤشرات حرجة", f"{len(weak_inds)}")
+                
+                # الرسم البياني (تم حله باستخدام الأعمدة)
+                st.markdown("#### 📈 أثر التدخل على الترتيب")
+                chart_data = pd.DataFrame({
+                    "التنبؤ الآلي (Baseline)": [baseline_rank],
+                    "بعد المحاكاة (Simulation)": [current_rank]
                 })
-            st.table(pd.DataFrame(recs))
-        else:
-            st.success("🎉 جميع المؤشرات في وضع ممتاز في هذه المحاكاة!")
-
-else:
-    st.markdown("""
-    <div style='text-align: center; padding: 50px;'>
-        <h2>👋 مرحبًا بك في منصة PARTS الهجينة</h2>
-        <p>للبدء، يرجى رفع ملف البيانات التاريخية من القائمة الجانبية.</p>
-        <p style='color: gray;'>سيقوم النظام تلقائيًا بالتنبؤ بالمستقبل ثم يتيح لك محاكاة القرارات.</p>
-    </div>
-    """, unsafe_allow_html=True)
+                st.bar_chart(chart_data, color=["#FF5722", "#4CAF50"])
+                
+                # التوصيات
+                st.markdown("#### 💡 التوصيات الذكية")
+                if weak_inds:
+                    recs = []
+                    for ind in weak_inds:
+                        recs.append({
+                            "المؤشر": ind,
+                            "التوصية": recommendations_map.get(ind, "-"),
+                            "الأهمية": f"{feature_importance_map.get(ind, 0.5):.2f}"
+                        })
+                    st.dataframe(pd.DataFrame(recs), use_container_width=True)
+                else:
+                    st.success("أداء ممتاز! جميع
