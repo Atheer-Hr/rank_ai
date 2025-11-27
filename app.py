@@ -56,6 +56,7 @@ def load_assets_lite() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
 
     try:
         # 1. LOAD TFLITE INTERPRETER (Fast and lightweight)
+        # التحقق من وجود الملفات الجديدة
         if not os.path.exists('ranking_model_lite.tflite'):
              st.error("❌ فشل: لم يتم العثور على ملف 'ranking_model_lite.tflite'. تأكد من رفع الملف المُقلَّل.")
              return default_return
@@ -64,6 +65,7 @@ def load_assets_lite() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
         interpreter.allocate_tensors()
 
         # 2. LOAD SCALERS AND INDICATORS
+        # نستخدم أسماء الملفات الجديدة
         scaler_X = joblib.load('scaler_X_lite.pkl')
         scaler_y = joblib.load('scaler_y_lite.pkl')
         
@@ -80,6 +82,7 @@ def load_assets_lite() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
         return interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
     
     except Exception as e:
+        # رسالة فشل مخصصة لنموذج TFLite
         st.error(f"⚠️ فشل تحميل النموذج المُقلَّل. تأكد من رفع الملفات الجديدة (.tflite, .pkl, .txt). الخطأ المفصل: {e}")
         return default_return
 
