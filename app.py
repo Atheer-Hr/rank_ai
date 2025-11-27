@@ -16,8 +16,10 @@ import os
 
 # وظيفة مساعدة لإيجاد المسار الصحيح للملف داخل المجلد المؤقت
 def find_asset_path(base_path, filename):
+    """يبحث عن الملف المحدد في أي مجلد فرعي داخل المسار الأساسي."""
     for root, _, files in os.walk(base_path):
         if filename in files:
+            # يعيد المسار الكامل للملف
             return os.path.join(root, filename)
     return None
 
@@ -53,7 +55,7 @@ def load_assets_secure():
 
     # 3. تحميل النموذج والمتغيرات من الملفات التي تم فك ضغطها
     try:
-        # استخدام وظيفة البحث المرن للعثور على المسار الصحيح
+        # استخدام وظيفة البحث المرن للعثور على المسار الصحيح للملفات الأربعة
         model_path = find_asset_path(BASE_PATH, 'ranking_model.h5')
         scaler_X_path = find_asset_path(BASE_PATH, 'scaler_X.pkl')
         scaler_y_path = find_asset_path(BASE_PATH, 'scaler_y.pkl')
@@ -62,6 +64,8 @@ def load_assets_secure():
         # التحقق من أن جميع المسارات موجودة
         if not all([model_path, scaler_X_path, scaler_y_path, indicators_path]):
             st.error("⚠️ فشل: لم يتم العثور على أحد ملفات الأصول الأساسية داخل الـ ZIP.")
+            # إرجاع تفاصيل لمساعدة المستخدم في التشخيص
+            st.write(f"المسارات التي تم البحث عنها: [Model: {model_path}, Scaler_X: {scaler_X_path}, Indicators: {indicators_path}]")
             return default_return
 
         # تحميل الأصول
