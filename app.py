@@ -14,6 +14,13 @@ import os
 # -------------------- 1. تحميل الأصول الآمن والمؤمن --------------------
 # ======================================================================
 
+# وظيفة مساعدة لإيجاد المسار الصحيح للملف داخل المجلد المؤقت
+def find_asset_path(base_path, filename):
+    for root, _, files in os.walk(base_path):
+        if filename in files:
+            return os.path.join(root, filename)
+    return None
+
 @st.cache_resource
 def load_assets_secure():
     # تعريف القيم الافتراضية للتعامل مع أي فشل
@@ -27,41 +34,42 @@ def load_assets_secure():
     ASSET_URL = st.secrets["ASSET_DOWNLOAD_URL"]
     
     # 2. تنزيل الملف المضغوط وفك الضغط
+    BASE_PATH = "./temp_assets/"
     try:
         st.write("تحميل الأصول الهامة...")
         response = requests.get(ASSET_URL, stream=True)
         response.raise_for_status() 
         
-        # فك ضغط الملفات في مسار مؤقت
-        BASE_PATH = "./temp_assets/"
-        os.makedirs(BASE_PATH, exist_ok=True) # تأكد من وجود المجلد
+        # إنشاء المجلد المؤقت وفك الضغط
+        os.makedirs(BASE_PATH, exist_ok=True) 
         
         with zipfile.ZipFile(BytesIO(response.content)) as z:
             z.extractall(path=BASE_PATH) 
         st.write("✅ تم تحميل وفك ضغط الأصول بنجاح.")
 
     except Exception as e:
-        # إذا فشل التحميل، نرجع سبب الفشل في رسالة واضحة
         st.error(f"⚠️ خطأ في التحميل/فك الضغط (الخطوة 2). تحقق من إعدادات مشاركة Google Drive وصلاحية الرابط. الخطأ: {e}")
         return default_return
 
     # 3. تحميل النموذج والمتغيرات من الملفات التي تم فك ضغطها
     try:
-        # يجب الآن القراءة من المسار المؤقت (BASE_PATH)
-        # إذا كانت الملفات داخل مجلد آخر داخل الـ zip (مثلاً: model_assets/ranking_model.h5)
-        # فقد تحتاج إلى تعديل BASE_PATH
+        # استخدام وظيفة البحث المرن للعثور على المسار الصحيح
+        model_path = find_asset_path(BASE_PATH, 'ranking_model.h5')
+        scaler_X_path = find_asset_path(BASE_PATH, 'scaler_X.pkl')
+        scaler_y_path = find_asset_path(BASE_PATH, 'scaler_y.pkl')
+        indicators_path = find_asset_path(BASE_PATH, 'indicator_names.txt')
+
+        # التحقق من أن جميع المسارات موجودة
+        if not all([model_path, scaler_X_path, scaler_y_path, indicators_path]):
+            st.error("⚠️ فشل: لم يتم العثور على أحد ملفات الأصول الأساسية داخل الـ ZIP.")
+            return default_return
+
+        # تحميل الأصول
+        model = load_model(model_path, compile=False)
+        scaler_X = joblib.load(scaler_X_path)
+        scaler_y = joblib.load(scaler_y_path)
         
-        # [التصحيح الرئيسي] التأكد من وجود الملفات في المسار المؤقت
-        if not os.path.exists(BASE_PATH + 'ranking_model.h5'):
-            # هذا يحدث إذا كانت الملفات مضغوطة داخل مجلد فرعي داخل ملف الـ ZIP
-            st.warning("⚠️ الملف ranking_model.h5 غير موجود مباشرة في المسار. تأكد من أن الملفات ليست داخل مجلد فرعي داخل الـ ZIP.")
-            # هنا قد تحتاج إلى محاولة تحديد مسار بديل إذا كانت الملفات داخل مجلد (مثلاً: BASE_PATH + 'model_assets/')
-            
-        model = load_model(BASE_PATH + 'ranking_model.h5', compile=False)
-        scaler_X = joblib.load(BASE_PATH + 'scaler_X.pkl')
-        scaler_y = joblib.load(BASE_PATH + 'scaler_y.pkl')
-        
-        with open(BASE_PATH + 'indicator_names.txt', 'r', encoding='utf-8') as f:
+        with open(indicators_path, 'r', encoding='utf-8') as f:
             indicator_names = [line.strip() for line in f]
 
         # 4. تعاريف القواميس الثابتة (لضمان أنها متاحة بعد التحميل)
