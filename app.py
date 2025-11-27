@@ -99,12 +99,10 @@ interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, execution
 # ======================================================================
 
 def forecast_future_values(df_history, target_years, indicators):
-    """ التنبؤ بقيم المؤشرات مع إضافة 'تذبذب طبيعي' لجعل النتائج ديناميكية """
+    """ التنبؤ الأساسي مع تذبذب طبيعي """
     forecast_rows = []
     years_train = df_history['السنة'].values.reshape(-1, 1)
-    
-    # استخدام بذرة عشوائية ثابتة لضمان تكرار نفس النتائج عند إعادة التشغيل
-    np.random.seed(42)
+    np.random.seed(42) # لضمان ثبات التذبذب
 
     for year in target_years:
         row_data = {'السنة': year, 'نوع السنة': 'متنبأ بها'}
@@ -114,72 +112,77 @@ def forecast_future_values(df_history, target_years, indicators):
                 y_train = df_history[col].values
                 model.fit(years_train, y_train)
                 predicted_val = model.predict([[year]])[0]
-                
-                # --- التعديل الجوهري هنا ---
-                # إضافة تذبذب عشوائي بسيط (Noise) لمحاكاة الواقع وتغيير الترتيب
-                # التذبذب بين -3.0 إلى +3.0 درجات
-                fluctuation = np.random.uniform(-3.0, 3.0)
-                final_val = predicted_val + fluctuation
-                
-                row_data[col] = max(0.0, min(100.0, final_val))
+                # إضافة تذبذب بسيط
+                noise = np.random.uniform(-2.0, 2.0)
+                row_data[col] = max(0.0, min(100.0, predicted_val + noise))
             else:
                 row_data[col] = 50.0 
         forecast_rows.append(row_data)
         
     return pd.DataFrame(forecast_rows)
 
-def run_ai_model_batch(df_input, interpreter, scaler_X, scaler_y, indicator_names):
-    """ تشغيل النموذج على مجموعة بيانات """
-    input_data = df_input[indicator_names].values.astype(np.float32)
-    X_scaled = scaler_X.transform(input_data)
+def run_single_prediction(input_values, interpreter, scaler_X, scaler_y):
+    """ تشغيل النموذج لسجل واحد """
+    input_array = np.array([input_values]).astype(np.float32)
+    X_scaled = scaler_X.transform(input_array)
     
-    predictions = []
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
+    interpreter.set_tensor(input_details[0]['index'], X_scaled)
+    interpreter.invoke()
+    y_scaled = interpreter.get_tensor(output_details[0]['index'])
     
-    for i in range(len(X_scaled)):
-        interpreter.set_tensor(input_details[0]['index'], X_scaled[i].reshape(1, -1))
-        interpreter.invoke()
-        y_scaled = interpreter.get_tensor(output_details[0]['index'])
-        y_orig = scaler_y.inverse_transform(y_scaled).flatten()[0]
-        predictions.append(max(1.0, y_orig))
-        
-    return predictions, X_scaled
+    return max(1.0, scaler_y.inverse_transform(y_scaled).flatten()[0])
 
-def calculate_full_analysis(df_forecast, predictions, X_scaled_norm, indicator_names, clusters, feature_importance_map):
-    """ إجراء جميع الحسابات بشكل ديناميكي لكل سنة """
+def calculate_full_analysis(df_forecast, interpreter, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map):
+    """ 
+    التحليل الديناميكي التراكمي:
+    يفترض تحسن المؤشرات الضعيفة سنوياً لتغيير الأولويات (Feedback Loop).
+    """
     
     results_list = []
     explanations_list = []
     impact_matrix_list = []
     dynamic_recs_list = []
     
+    # مصفوفة لتخزين "التحسينات التراكمية"
+    accumulated_improvements = {name: 0.0 for name in indicator_names}
+    
     for i, row in df_forecast.iterrows():
         year = row['السنة']
-        pred_rank = predictions[i]
         
-        # 1. تحديد المؤشرات الضعيفة *لهذه السنة تحديداً*
-        # نستخدم القيم الأصلية المتنبأ بها (التي تحتوي على التذبذب) لمعرفة الأضعف
-        current_year_vals = row[indicator_names].values.astype(float)
+        # 1. القيم الأساسية + التحسينات السابقة
+        base_values = row[indicator_names].values.astype(float)
+        current_values = []
+        for idx, name in enumerate(indicator_names):
+            improved_val = base_values[idx] + accumulated_improvements[name]
+            current_values.append(max(0.0, min(100.0, improved_val)))
+            
+        current_values = np.array(current_values)
         
+        # 2. تشغيل النموذج
+        pred_rank = run_single_prediction(current_values, interpreter, scaler_X, scaler_y)
+        
+        # 3. تحديد المؤشرات الضعيفة *الجديدة*
         risks_unsorted = []
         for idx, name in enumerate(indicator_names):
-            val = current_year_vals[idx]
-            risks_unsorted.append((name, val))
+            risks_unsorted.append((name, current_values[idx]))
             
-        # الفرز حسب القيمة (الأقل هو الأضعف)
         risks_sorted = sorted(risks_unsorted, key=lambda x: x[1])
         top_5_risks = risks_sorted[:5] 
         top_inds_names = [r[0] for r in top_5_risks]
         
-        # 2. حساب التآزر
+        # 4. تطبيق التحسين للسنة القادمة (Feedback Loop)
+        # نضيف 5 نقاط تحسين للمؤشرات الضعيفة، لتظهر نتائجها في السنوات التالية
+        for weak_ind in top_inds_names:
+            accumulated_improvements[weak_ind] += 5.0
+            
+        # 5. الحسابات الإحصائية
         selected_set = set(top_inds_names)
         hits = {c: len(selected_set & members) for c, members in clusters.items()}
-        same_cluster_boost = sum(1 for _, v in hits.items() if v >= 2) * 0.08
-        multi_cluster_boost = sum(1 for _, v in hits.items() if v >= 1) * 0.03
-        m_synergy = min(1.0 + same_cluster_boost + multi_cluster_boost, 1.25)
+        synergy_boost = 1.0 + (sum(1 for v in hits.values() if v >= 2) * 0.08)
+        m_synergy = min(synergy_boost, 1.25)
         
-        # 3. حساب المكاسب
         importance_sum = sum([feature_importance_map.get(ind, 0.05) for ind in top_inds_names])
         total_gain = pred_rank * 0.1 * importance_sum * m_synergy
         
@@ -187,7 +190,7 @@ def calculate_full_analysis(df_forecast, predictions, X_scaled_norm, indicator_n
         rank_partial = max(1.0, pred_rank - total_gain * 0.6)
         rank_weak = max(1.0, pred_rank - total_gain * 0.3)
         
-        # --- تجميع البيانات ---
+        # --- تخزين النتائج ---
         results_list.append({
             "السنة": year,
             "نوع السنة": "متنبأ بها",
@@ -209,7 +212,6 @@ def calculate_full_analysis(df_forecast, predictions, X_scaled_norm, indicator_n
         })
         
         for ind, val in top_5_risks:
-            # تطبيع القيمة محلياً لحساب الأثر
             norm_val = val / 100.0
             importance = feature_importance_map.get(ind, 0.0)
             base_component = max(1.0 - float(norm_val), 0.02)
@@ -230,7 +232,6 @@ def calculate_full_analysis(df_forecast, predictions, X_scaled_norm, indicator_n
             "خيار ضعيف (تدخل سريع)": f"تحسن ≈ {round(total_gain * 0.3, 2)} رتبة"
         })
 
-    # إنشاء الجداول النهائية
     df_results = pd.DataFrame(results_list)
     df_explain = pd.DataFrame(explanations_list)
     
@@ -257,7 +258,7 @@ def generate_full_excel(df_results, df_explain, df_impact, df_dynamic, accuracy_
 # -------------------- 4. واجهة المستخدم (Streamlit UI) --------------------
 # ======================================================================
 
-st.set_page_config(layout="wide", page_title="نظام الذكاء الاصطناعي الشامل")
+st.set_page_config(layout="wide", page_title="منصة بارتز (PARTS)")
 
 st.markdown("""
     <style>
@@ -270,10 +271,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🚀 منصة الذكاء الاصطناعي لتحسين ترتيب المدارس (النسخة الشاملة)")
+# --- تعديل العنوان كما طلبت ---
+st.title("🚀 منصة بارتز (PARTS) لتحسين ترتيب المدارس")
 st.markdown("---")
 
-# --- الشريط الجانبي ---
 st.sidebar.header("📂 1. البيانات التاريخية")
 uploaded_file = st.sidebar.file_uploader("ارفع ملف Excel (يحتوي على: السنة + المؤشرات)", type=["xlsx"])
 
@@ -298,15 +299,12 @@ if uploaded_file is not None:
             st.error("الرجاء اختيار سنة واحدة على الأقل.")
             st.stop()
 
-        # 1. التنبؤ بالقيم المستقبلية (مع التذبذب الديناميكي)
+        # 1. التنبؤ الأساسي
         df_forecast = forecast_future_values(df_history, selected_years, indicator_names)
         
-        # 2. تشغيل النموذج للتنبؤ بالترتيب
-        predictions, X_scaled_norm = run_ai_model_batch(df_forecast, interpreter, scaler_X, scaler_y, indicator_names)
-        
-        # 3. إجراء التحليل الشامل
+        # 2. تشغيل التحليل التراكمي (الديناميكي)
         df_results, df_explain, df_impact, df_dynamic = calculate_full_analysis(
-            df_forecast, predictions, X_scaled_norm, indicator_names, clusters, feature_importance_map
+            df_forecast, interpreter, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map
         )
         
         # 4. حساب الدقة
@@ -318,7 +316,6 @@ if uploaded_file is not None:
 
         st.success("✅ تم اكتمال التحليل بنجاح! التوصيات الآن متغيرة وديناميكية لكل سنة.")
         
-        # التبويبات
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "📊 الداشبورد", 
             "📑 النتائج التفصيلية", 
@@ -332,7 +329,7 @@ if uploaded_file is not None:
             st.header("لوحة القيادة البيانية (Dashboard)")
             col_chart1, col_chart2 = st.columns(2)
             with col_chart1:
-                st.subheader("تطور الترتيب المتوقع (بدون تدخل)")
+                st.subheader("تطور الترتيب المتوقع (مع التحسين المستمر)")
                 chart_data = df_results[['السنة', 'الترتيب المتنبأ']].set_index('السنة')
                 st.line_chart(chart_data)
             with col_chart2:
@@ -372,7 +369,7 @@ if uploaded_file is not None:
         st.download_button(
             label="📥 تحميل التقرير الكامل (ملف Excel مطابق للكولاب)",
             data=excel_file,
-            file_name="ai_agent_school_improvement_final.xlsx",
+            file_name="PARTS_school_ranking_report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
