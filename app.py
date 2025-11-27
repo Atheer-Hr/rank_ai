@@ -13,7 +13,7 @@ from typing import Tuple, Dict, Any, List # لتعريف الأنواع
 
 # @st.cache_resource: يستخدم للتحميل مرة واحدة فقط
 @st.cache_resource
-def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict]:
+def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
     # تحديد القواميس الثابتة (لضمان أنها متاحة دائماً)
     recommendations_map = {
         "الكفاءة للعنصر البشري": "تطوير برامج تدريبية مستمرة للمعلمين وربطها بتقييم الأداء الفردي.",
@@ -52,7 +52,15 @@ def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict]:
         "بيئة وتجهيز": {"المرافق التعليمية والمباني","التقنية بالمدارس"}
     }
 
+    # القيمة الافتراضية للفشل
+    default_return = None, None, None, [], None, None, None, None
+
     try:
+        # التحقق من وجود الملفات
+        if not os.path.exists('ranking_model.h5'):
+             st.error("❌ فشل: لم يتم العثور على ملف 'ranking_model.h5'. تأكد من رفع الملف للمستودع.")
+             return default_return
+        
         # التحميل مباشرة من المسار المحلي (المستودع العام)
         model = load_model('ranking_model.h5', compile=False)
         scaler_X = joblib.load('scaler_X.pkl')
@@ -72,7 +80,8 @@ def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict]:
     except Exception as e:
         # في حالة الفشل، نظهر رسالة واضحة للمستخدم
         st.error(f"⚠️ فشل تحميل الأصول. تأكد من أن الملفات الأربعة (.h5, .pkl, .txt) موجودة في المستودع بجانب app.py. الخطأ: {e}")
-        return None, None, None, [], None, None, None, None
+        st.error(f"تلميح: قد يكون حجم ملف .h5 أكبر من اللازم للتحميل.")
+        return default_return
 
 model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = load_assets_direct()
 
