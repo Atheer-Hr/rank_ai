@@ -19,6 +19,7 @@ def load_assets_secure():
     # 1. جلب رابط التحميل الآمن من مفاتيح السرية (Secrets)
     if "ASSET_DOWNLOAD_URL" not in st.secrets:
         st.error("⚠️ فشل: لم يتم العثور على مفتاح ASSET_DOWNLOAD_URL السري. لا يمكن تحميل النموذج.")
+        # نرجع قيم None لضمان أن التطبيق لا ينهار ولكنه يعرض رسالة تحذير
         return None, None, None, [], None, None, None, None
 
     ASSET_URL = st.secrets["ASSET_DOWNLOAD_URL"]
@@ -27,23 +28,29 @@ def load_assets_secure():
     try:
         st.write("تحميل الأصول الهامة...")
         response = requests.get(ASSET_URL, stream=True)
-        response.raise_for_status() # يتحقق من وجود خطأ في الرابط (مثل 404 أو 403)
+        response.raise_for_status() 
         
         # فك ضغط الملفات في مسار مؤقت
         with zipfile.ZipFile(BytesIO(response.content)) as z:
-            z.extractall(path=".") 
+            # استخدام z.namelist() للتحقق من الملفات داخل الـ zip (للتأكد من المسارات)
+            z.extractall(path="./temp_assets") # فك الضغط في مجلد مؤقت آمن
         st.write("✅ تم تحميل وفك ضغط الأصول بنجاح.")
+        
+        # تحديد المسار المؤقت
+        BASE_PATH = "./temp_assets/"
+
     except Exception as e:
-        st.error(f"⚠️ خطأ في التحميل/فك الضغط. تأكد من إعدادات مشاركة Google Drive و صلاحية الرابط. الخطأ: {e}")
+        st.error(f"⚠️ خطأ في التحميل/فك الضغط. تأكد من إعدادات مشاركة Google Drive وصلاحية الرابط. الخطأ: {e}")
         return None, None, None, [], None, None, None, None
 
     # 3. تحميل النموذج والمتغيرات من الملفات التي تم فك ضغطها
     try:
-        model = load_model('ranking_model.h5', compile=False)
-        scaler_X = joblib.load('scaler_X.pkl')
-        scaler_y = joblib.load('scaler_y.pkl')
+        # يجب الآن القراءة من المسار المؤقت (BASE_PATH)
+        model = load_model(BASE_PATH + 'ranking_model.h5', compile=False)
+        scaler_X = joblib.load(BASE_PATH + 'scaler_X.pkl')
+        scaler_y = joblib.load(BASE_PATH + 'scaler_y.pkl')
         
-        with open('indicator_names.txt', 'r', encoding='utf-8') as f:
+        with open(BASE_PATH + 'indicator_names.txt', 'r', encoding='utf-8') as f:
             indicator_names = [line.strip() for line in f]
 
         # 4. تعاريف القواميس الثابتة (لضمان أنها متاحة بعد التحميل)
@@ -93,6 +100,7 @@ def load_assets_secure():
         return model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
     
     except Exception as e:
+        # إذا حدث خطأ في التحميل من المسار المؤقت، نظهر الخطأ للمستخدم
         st.error(f"⚠️ خطأ في تحميل الأصول (بعد فك الضغط). تأكد من سلامة ملفاتك. الخطأ: {e}")
         return None, None, None, [], None, None, None, None
 
