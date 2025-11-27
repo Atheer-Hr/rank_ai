@@ -10,6 +10,7 @@ import zipfile
 from io import BytesIO 
 import os 
 import tempfile # لإدارة المسارات المؤقتة بشكل أفضل
+from typing import Tuple, Dict, Any, List # لتعريف الأنواع
 
 # ======================================================================
 # -------------------- 1. تحميل الأصول الآمن والمؤمن --------------------
@@ -26,7 +27,7 @@ def find_asset_path(base_path, filename):
 
 # @st.cache_data: يتميز بكونه أكثر أمانًا للملفات الكبيرة من @st.cache_resource
 @st.cache_data(show_spinner="جاري تحميل النماذج والمطبّعات بشكل آمن...")
-def load_assets_secure():
+def load_assets_secure() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
     # تعريف القيم الافتراضية للتعامل مع أي فشل
     default_return = None, None, None, [], None, None, None, None
 
@@ -40,20 +41,18 @@ def load_assets_secure():
     try:
         st.info(f"محاولة تنزيل الأصول من: {ASSET_URL[:50]}...")
         response = requests.get(ASSET_URL, stream=True)
+        response.raise_for_status() # يتحقق من رمز الحالة (مثل 404 أو 500)
         
-        if response.status_code != 200:
-            st.error(f"⚠️ فشل التحميل. رمز الحالة: {response.status_code}. قد يكون الرابط خطأ.")
-            return default_return
-            
         zip_content = response.content
         zip_size_mb = len(zip_content) / (1024 * 1024)
         st.info(f"✅ تم التنزيل بنجاح. الحجم: {zip_size_mb:.2f} ميجابايت.")
         
-    except Exception as e:
-        st.error(f"⚠️ خطأ في التحميل (requests). تأكد من إعدادات الشبكة/الرابط. الخطأ: {e}")
+    except requests.exceptions.RequestException as e:
+        st.error(f"⚠️ خطأ في التحميل. تحقق من إعدادات المشاركة/الرابط. الخطأ: {e}")
         return default_return
 
     # --- STEP 2: Extraction and Path Setup ---
+    # نستخدم مسار مؤقت آمن لـ Streamlit
     BASE_PATH = tempfile.mkdtemp() + "/"
     
     # وظيفة مساعدة لفك الضغط الآمن
@@ -82,9 +81,10 @@ def load_assets_secure():
         scaler_y_path = find_asset_path(BASE_PATH, 'scaler_y.pkl')
         indicators_path = find_asset_path(BASE_PATH, 'indicator_names.txt')
 
+        # التحقق من أن جميع المسارات موجودة
         if not all([model_path, scaler_X_path, scaler_y_path, indicators_path]):
-            st.error("⚠️ فشل: لم يتم العثور على أحد الملفات الأربعة. تحقق من أسماء الملفات داخل الـ ZIP.")
-            st.write(f"المسارات التي تم البحث عنها: [Model: {model_path}, Scaler_X: {scaler_X_path}, Indicators: {indicators_path}]")
+            st.error("⚠️ فشل: لم يتم العثور على أحد الملفات الأربعة. تأكد من أسماء الملفات داخل الـ ZIP.")
+            # st.write(f"المسارات التي تم البحث عنها: [Model: {model_path}, Scaler_X: {scaler_X_path}, Indicators: {indicators_path}]")
             return default_return
 
         # تحميل الأصول
