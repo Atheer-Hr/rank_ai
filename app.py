@@ -89,14 +89,13 @@ def forecast_future_values(df_history, target_year, indicators):
     
     for col in indicators:
         if col in df_history.columns:
-            # تدريب نموذج خطي لكل مؤشر لاكتشاف الـ Trend
             model = LinearRegression()
             y_train = df_history[col].values
             model.fit(years_train, y_train)
             predicted_val = model.predict([[target_year]])[0]
             row_data[col] = max(0.0, min(100.0, predicted_val))
         else:
-            row_data[col] = 50.0 # قيمة افتراضية
+            row_data[col] = 50.0 
     return row_data
 
 def run_ai_model(input_values_dict, interpreter, scaler_X, scaler_y, indicator_names):
@@ -154,7 +153,7 @@ if uploaded_file is not None:
         
     last_year = int(df_history['السنة'].max())
     
-    # === التعديل هنا: السماح باختيار عدة سنوات + نطاق مفتوح (10 سنوات) ===
+    # اختيار السنوات (نطاق مفتوح 10 سنوات)
     future_years_options = [last_year + i for i in range(1, 11)]
     selected_years = st.sidebar.multiselect(
         "اختر السنوات المستقبلية للتنبؤ بها:",
@@ -168,47 +167,42 @@ if uploaded_file is not None:
 
     st.header("📊 النتائج والمحاكاة (PARTS Simulator)")
     
-    # إنشاء تبويبات (Tabs) لكل سنة مختارة
+    # التبويبات
     tabs = st.tabs([str(year) for year in selected_years])
     
     for i, target_year in enumerate(selected_years):
         with tabs[i]:
             st.markdown(f"### 🗓️ محاكاة سنة {target_year}")
             
-            # 1. التنبؤ الأولي لهذه السنة (Forecast Baseline)
+            # التنبؤ الأولي
             forecasted_values = forecast_future_values(df_history, target_year, indicator_names)
             
             col_sim, col_results = st.columns([1, 2])
             
-            # >> عمود المحاكاة (Sliders)
+            # عمود المحاكاة
             with col_sim:
                 st.info("🔧 اضبط المؤشرات (Simulation)")
                 user_inputs = {}
                 for name in indicator_names:
                     default_val = float(forecasted_values[name])
-                    # مفتاح فريد لكل سنة لتجنب تداخل السلايدر
                     slider_key = f"{name}_{target_year}"
                     
                     user_inputs[name] = st.slider(
                         f"{name}", 0.0, 100.0, default_val, key=slider_key
                     )
             
-            # >> عمود النتائج (Results)
+            # عمود النتائج
             with col_results:
-                # تشغيل النموذج
                 current_rank = run_ai_model(user_inputs, interpreter, scaler_X, scaler_y, indicator_names)
                 baseline_rank = run_ai_model(forecasted_values, interpreter, scaler_X, scaler_y, indicator_names)
                 
-                # حساب التآزر
                 synergy_factor, weak_inds = calculate_synergy(user_inputs, indicator_names, clusters)
                 
-                # عرض النتائج
                 m1, m2, m3 = st.columns(3)
                 m1.metric("الترتيب المتوقع", f"{current_rank:.2f}")
                 m2.metric("معامل التآزر", f"{synergy_factor:.2f}x")
                 m3.metric("مؤشرات حرجة", f"{len(weak_inds)}")
                 
-                # الرسم البياني (تم حله باستخدام الأعمدة)
                 st.markdown("#### 📈 أثر التدخل على الترتيب")
                 chart_data = pd.DataFrame({
                     "التنبؤ الآلي (Baseline)": [baseline_rank],
@@ -216,7 +210,6 @@ if uploaded_file is not None:
                 })
                 st.bar_chart(chart_data, color=["#FF5722", "#4CAF50"])
                 
-                # التوصيات
                 st.markdown("#### 💡 التوصيات الذكية")
                 if weak_inds:
                     recs = []
@@ -228,4 +221,13 @@ if uploaded_file is not None:
                         })
                     st.dataframe(pd.DataFrame(recs), use_container_width=True)
                 else:
-                    st.success("أداء ممتاز! جميع
+                    st.success("أداء ممتاز! جميع المؤشرات أعلى من 60%.")
+
+else:
+    st.markdown("""
+    <div style='text-align: center; padding: 50px;'>
+        <h2>👋 مرحبًا بك في منصة PARTS الهجينة</h2>
+        <p>ابدأ برفع ملف Excel من القائمة الجانبية.</p>
+        <p>سيتيح لك النظام التنبؤ والمحاكاة لعدة سنوات قادمة.</p>
+    </div>
+    """, unsafe_allow_html=True)
