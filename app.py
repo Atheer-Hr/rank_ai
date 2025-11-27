@@ -95,7 +95,7 @@ def forecast_future_values(df_history, target_year, indicators):
             predicted_val = model.predict([[target_year]])[0]
             row_data[col] = max(0.0, min(100.0, predicted_val))
         else:
-            # إصلاح المشكلة: بدلاً من 0، نضع متوسط (50) لتجنب انهيار النموذج
+            # قيمة متوسطة لتجنب الأخطاء في حال عدم وجود العمود
             row_data[col] = 50.0 
     return row_data
 
@@ -117,12 +117,11 @@ def run_ai_model(input_values_dict, interpreter, scaler_X, scaler_y, indicator_n
     # 3. عكس التطبيع
     rank = scaler_y.inverse_transform(y_scaled).flatten()[0]
     
-    # إصلاح الأرقام السالبة (الترتيب لا يمكن أن يكون سالباً)
+    # ضمان عدم ظهور أرقام سالبة أو غير منطقية
     return max(1.0, rank)
 
 def calculate_synergy(current_inputs, indicator_names, clusters):
     """ حساب التآزر (Synergy) """
-    # نعتبر المؤشرات الضعيفة هي التي تقل عن 60%
     weak_inds = [name for name in indicator_names if current_inputs[name] < 60]
     
     hits = {c: len(set(weak_inds) & members) for c, members in clusters.items()}
@@ -140,8 +139,7 @@ st.markdown("""
         .main { direction: rtl; }
         .stSlider > div { direction: rtl; }
         h1, h2, h3, p, div { text-align: right; font-family: 'Tahoma'; }
-        .metric-card { background-color: #1e1e1e; padding: 15px; border-radius: 10px; border: 1px solid #333; text-align: center; }
-        .highlight { color: #4CAF50; font-weight: bold; }
+        div[data-testid="stMetricValue"] { direction: rtl; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -169,7 +167,6 @@ if uploaded_file is not None:
     st.header(f"🎛️ لوحة المحاكاة التفاعلية لسنة {target_year}")
     st.info("💡 **المرحلة الهجينة:** القيم أدناه تم التنبؤ بها آلياً (AI Prediction). يمكنك الآن تعديلها يدوياً (Simulation) لرؤية أثر القرارات.")
     
-    # تقسيم الشاشة
     col_sim, col_results = st.columns([1, 2])
     
     # >> عمود المحاكاة (Sliders)
@@ -177,49 +174,47 @@ if uploaded_file is not None:
         st.markdown("### 🔧 ضبط المؤشرات (Simulation)")
         user_inputs = {}
         for name in indicator_names:
-            # القيمة الافتراضية هي القيمة المتنبأ بها
             default_val = float(forecasted_values[name])
             user_inputs[name] = st.slider(f"{name}", 0.0, 100.0, default_val, key=name)
             
-            # عرض الفرق عن التنبؤ
             diff = user_inputs[name] - default_val
             if diff != 0:
                 st.caption(f"تغيير عن التنبؤ: {diff:+.1f}%")
 
     # >> عمود النتائج (Results)
     with col_results:
-        # 1. تشغيل النموذج على القيم الحالية (سواء كانت متنبأ بها أو معدلة)
+        # تشغيل النموذج
         current_rank = run_ai_model(user_inputs, interpreter, scaler_X, scaler_y, indicator_names)
+        baseline_rank = run_ai_model(forecasted_values, interpreter, scaler_X, scaler_y, indicator_names)
         
-        # 2. حساب التآزر
+        # حساب التآزر
         synergy_factor, weak_inds = calculate_synergy(user_inputs, indicator_names, clusters)
         
         st.markdown("### 📊 النتائج والتشخيص (Analysis & Diagnosis)")
         
-        # عرض الميتركس
         m1, m2, m3 = st.columns(3)
-        m1.metric("الترتيب المتوقع (النتيجة النهائية)", f"{current_rank:.2f}")
+        m1.metric("الترتيب المتوقع", f"{current_rank:.2f}")
         m2.metric("معامل التآزر (Synergy)", f"{synergy_factor:.2f}x")
         m3.metric("عدد المؤشرات الحرجة", f"{len(weak_inds)}")
         
-        # الرسم البياني للمقارنة (Baseline vs Simulation)
+        # --- الرسم البياني (تم الإصلاح هنا) ---
         st.markdown("#### 📈 أثر المحاكاة على الترتيب")
         
-        # نحسب الترتيب "الأساسي" (بدون تعديلات المستخدم) للمقارنة
-        baseline_rank = run_ai_model(forecasted_values, interpreter, scaler_X, scaler_y, indicator_names)
-        
+        # جعل البيانات في أعمدة منفصلة لتلوينها بشكل صحيح
         chart_data = pd.DataFrame({
-            "السيناريو": ["التنبؤ الأصلي (Baseline)", "المحاكاة الحالية (Simulation)"],
-            "الترتيب (الأقل أفضل)": [baseline_rank, current_rank]
+            "التنبؤ الأصلي (Baseline)": [baseline_rank],
+            "المحاكاة الحالية (Simulation)": [current_rank]
         })
-        st.bar_chart(chart_data.set_index("السيناريو"), color=["#FF5722", "#4CAF50"])
         
+        st.bar_chart(chart_data, color=["#FF5722", "#4CAF50"])
+        
+        # رسالة التقييم
         if current_rank < baseline_rank:
             st.success(f"✅ محاكاتك أدت إلى تحسين الترتيب بمقدار {baseline_rank - current_rank:.2f} نقطة!")
         elif current_rank > baseline_rank:
             st.warning(f"⚠️ التعديلات الحالية أدت لتراجع الترتيب بمقدار {current_rank - baseline_rank:.2f} نقطة.")
 
-        # التوصيات (Recommendations)
+        # التوصيات
         st.markdown("### 💡 التوصيات الذكية (Recommendations)")
         if weak_inds:
             recs = []
@@ -234,7 +229,6 @@ if uploaded_file is not None:
             st.success("🎉 جميع المؤشرات في وضع ممتاز في هذه المحاكاة!")
 
 else:
-    # شاشة الترحيب
     st.markdown("""
     <div style='text-align: center; padding: 50px;'>
         <h2>👋 مرحبًا بك في منصة PARTS الهجينة</h2>
