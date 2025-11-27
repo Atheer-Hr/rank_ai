@@ -15,16 +15,14 @@ import tempfile # لإدارة المسارات المؤقتة بشكل أفضل
 # -------------------- 1. تحميل الأصول الآمن والمؤمن --------------------
 # ======================================================================
 
-# وظيفة مساعدة لفك الضغط الآمن
-def extract_assets_from_zip(zip_content, base_path):
-    """تستخلص الملفات من محتوى الـ ZIP إلى مسار محدد."""
-    try:
-        with zipfile.ZipFile(BytesIO(zip_content)) as z:
-            z.extractall(path=base_path)
-        return True
-    except Exception as e:
-        st.error(f"خطأ في فك الضغط: {e}")
-        return False
+# وظيفة مساعدة لإيجاد المسار الصحيح للملف داخل المجلد المؤقت
+def find_asset_path(base_path, filename):
+    """يبحث عن الملف المحدد في أي مجلد فرعي داخل المسار الأساسي."""
+    for root, _, files in os.walk(base_path):
+        if filename in files:
+            # يعيد المسار الكامل للملف
+            return os.path.join(root, filename)
+    return None
 
 # @st.cache_data: يتميز بكونه أكثر أمانًا للملفات الكبيرة من @st.cache_resource
 @st.cache_data(show_spinner="جاري تحميل النماذج والمطبّعات بشكل آمن...")
@@ -33,27 +31,49 @@ def load_assets_secure():
     default_return = None, None, None, [], None, None, None, None
 
     if "ASSET_DOWNLOAD_URL" not in st.secrets:
+        st.error("⚠️ فشل: لم يتم العثور على مفتاح ASSET_DOWNLOAD_URL السري. لا يمكن تحميل النموذج.")
         return default_return
 
     ASSET_URL = st.secrets["ASSET_DOWNLOAD_URL"]
     
-    # 1. تنزيل الملف المضغوط (يتم تنزيله في الذاكرة)
+    # --- STEP 1: Download Attempt and Status Check ---
     try:
+        st.info(f"محاولة تنزيل الأصول من: {ASSET_URL[:50]}...")
         response = requests.get(ASSET_URL, stream=True)
-        response.raise_for_status() 
+        
+        if response.status_code != 200:
+            st.error(f"⚠️ فشل التحميل. رمز الحالة: {response.status_code}. قد يكون الرابط خطأ.")
+            return default_return
+            
         zip_content = response.content
+        zip_size_mb = len(zip_content) / (1024 * 1024)
+        st.info(f"✅ تم التنزيل بنجاح. الحجم: {zip_size_mb:.2f} ميجابايت.")
+        
     except Exception as e:
-        st.error(f"⚠️ فشل التحميل من Google Drive. تحقق من صلاحية الرابط: {e}")
+        st.error(f"⚠️ خطأ في التحميل (requests). تأكد من إعدادات الشبكة/الرابط. الخطأ: {e}")
         return default_return
 
-    # 2. إنشاء مسار مؤقت محدد
+    # --- STEP 2: Extraction and Path Setup ---
     BASE_PATH = tempfile.mkdtemp() + "/"
     
+    # وظيفة مساعدة لفك الضغط الآمن
+    def extract_assets_from_zip(zip_content, base_path):
+        """تستخلص الملفات من محتوى الـ ZIP إلى مسار محدد."""
+        try:
+            with zipfile.ZipFile(BytesIO(zip_content)) as z:
+                z.extractall(path=base_path)
+            return True
+        except Exception as e:
+            st.error(f"خطأ في فك الضغط: {e}")
+            return False
+
     # 3. فك الضغط (استخدام وظيفة مساعدة)
     if not extract_assets_from_zip(zip_content, BASE_PATH):
+        st.error("❌ فشل فك ضغط الملف المضغوط.")
         return default_return
+    st.info(f"✅ تم فك الضغط في المسار المؤقت: {BASE_PATH}")
         
-    # 4. تحديد المسارات وتحميل الأصول (البحث المرن ضروري هنا)
+    # --- STEP 3: Loading Assets with Path Validation ---
     try:
         
         # استخدام البحث المرن (find_asset_path) لتحديد موقع الملفات داخل المسار المؤقت
@@ -63,18 +83,22 @@ def load_assets_secure():
         indicators_path = find_asset_path(BASE_PATH, 'indicator_names.txt')
 
         if not all([model_path, scaler_X_path, scaler_y_path, indicators_path]):
-            st.error("⚠️ فشل: لم يتم العثور على أحد ملفات الأصول الأساسية داخل الـ ZIP.")
+            st.error("⚠️ فشل: لم يتم العثور على أحد الملفات الأربعة. تحقق من أسماء الملفات داخل الـ ZIP.")
+            st.write(f"المسارات التي تم البحث عنها: [Model: {model_path}, Scaler_X: {scaler_X_path}, Indicators: {indicators_path}]")
             return default_return
 
         # تحميل الأصول
+        st.info(f"جاري تحميل نموذج Keras من: {model_path}")
         model = load_model(model_path, compile=False)
+        st.info("✅ تم تحميل النموذج بنجاح.")
+
         scaler_X = joblib.load(scaler_X_path)
         scaler_y = joblib.load(scaler_y_path)
         
         with open(indicators_path, 'r', encoding='utf-8') as f:
             indicator_names = [line.strip() for line in f]
 
-        # 5. تعاريف القواميس الثابتة (لضمان أنها متاحة)
+        # 4. تعاريف القواميس الثابتة (لضمان أنها متاحة)
         recommendations_map = {
             "الكفاءة للعنصر البشري": "تطوير برامج تدريبية مستمرة للمعلمين وربطها بتقييم الأداء الفردي.",
             "المناهج": "مراجعة شاملة للمناهج وتحديثها لتتوافق مع مهارات القرن 21.",
