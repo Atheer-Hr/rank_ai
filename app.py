@@ -3,19 +3,18 @@ import pandas as pd
 import numpy as np
 import joblib
 import tensorflow as tf
-from tensorflow.keras.models import load_model # Using load_model directly
+from tensorflow.lite import Interpreter
 import os
 from typing import Tuple, Dict, Any, List
 
 # ======================================================================
-# -------------------- 1. تحميل الأصول الأساسية (مباشر) --------------------
+# -------------------- 1. تحميل الأصول الأساسية (TFLITE) --------------------
 # ======================================================================
 
-# @st.cache_resource: يستخدم للتحميل مرة واحدة فقط
 @st.cache_resource
-def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
+def load_assets_lite() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
     
-    # تعريف القواميس الثابتة (لضمان أنها متاحة دائماً)
+    # Static definitions (Dictionaries)
     recommendations_map = {
         "الكفاءة للعنصر البشري": "تطوير برامج تدريبية مستمرة للمعلمين وربطها بتقييم الأداء الفردي.",
         "المناهج": "مراجعة شاملة للمناهج وتحديثها لتتوافق مع مهارات القرن 21.",
@@ -53,38 +52,38 @@ def load_assets_direct() -> Tuple[Any, Any, Any, List, Dict, Dict, Dict, Dict]:
         "بيئة وتجهيز": {"المرافق التعليمية والمباني","التقنية بالمدارس"}
     }
 
-    # Default value for failure
     default_return = None, None, None, [], None, None, None, None
 
     try:
-        # 1. CHECK FILE EXISTENCE
-        if not os.path.exists('ranking_model.h5'):
-             st.error("❌ فشل: لم يتم العثور على ملف 'ranking_model.h5'. تأكد من أن الملفات موجودة في المستودع.")
+        # 1. LOAD TFLITE INTERPRETER (Fast and lightweight)
+        if not os.path.exists('ranking_model_lite.tflite'):
+             st.error("❌ فشل: لم يتم العثور على ملف 'ranking_model_lite.tflite'. تأكد من رفع الملف المُقلَّل.")
              return default_return
         
-        # 2. LOAD ASSETS DIRECTLY (USING load_model for the whole H5 file)
-        model = load_model('ranking_model.h5', compile=False)
-        scaler_X = joblib.load('scaler_X.pkl')
-        scaler_y = joblib.load('scaler_y.pkl')
+        interpreter = Interpreter(model_path='ranking_model_lite.tflite')
+        interpreter.allocate_tensors()
+
+        # 2. LOAD SCALERS AND INDICATORS
+        scaler_X = joblib.load('scaler_X_lite.pkl')
+        scaler_y = joblib.load('scaler_y_lite.pkl')
         
-        with open('indicator_names.txt', 'r', encoding='utf-8') as f:
+        with open('indicator_names_lite.txt', 'r', encoding='utf-8') as f:
             indicator_names = [line.strip() for line in f]
+            
+        # 3. LOAD FEATURE IMPORTANCE MAP (Saved separately)
+        if not os.path.exists('feature_importance_map.pkl'):
+            st.error("❌ فشل: لم يتم العثور على ملف 'feature_importance_map.pkl'.")
+            return default_return
+            
+        feature_importance_map = joblib.load('feature_importance_map.pkl')
 
-        # 3. FEATURE IMPORTANCE EXTRACTION
-        weights = model.layers[0].get_weights()[0]
-        importances = np.mean(np.abs(weights), axis=1)
-        importances = importances / importances.sum()
-        feature_importance_map = {indicator_names[i]: float(importances[i]) for i in range(len(indicator_names))}
-
-        return model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
+        return interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
     
     except Exception as e:
-        # General failure message
-        st.error(f"⚠️ فشل تحميل الأصول. تأكد من أن الملفات (.h5, .pkl, .txt) موجودة في المستودع بجانب app.py.")
-        st.error(f"تلميح: قد تكون مشكلة في حجم ملف .h5 أو في طريقة حفظه. الخطأ المفصل: {e}")
+        st.error(f"⚠️ فشل تحميل النموذج المُقلَّل. تأكد من رفع الملفات الجديدة (.tflite, .pkl, .txt). الخطأ المفصل: {e}")
         return default_return
 
-model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = load_assets_direct()
+interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = load_assets_lite()
 
 # دالة التآزر (من الجزء 8 في كودك الأصلي)
 def synergy_multiplier(selected_inds, clusters):
@@ -97,18 +96,17 @@ def synergy_multiplier(selected_inds, clusters):
 
 
 # ======================================================================
-# -------------------- 2. وظيفة التنبؤ والتحليل --------------------
+# -------------------- 2. وظيفة التنبؤ والتحليل (باستخدام TFLite) --------------------
 # ======================================================================
 
-def run_prediction_and_analysis(input_values, model, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map):
+def run_prediction_and_analysis(input_values, interpreter, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map):
     
-    # تحقق من وجود النموذج قبل التشغيل
-    if model is None:
-        st.warning("النموذج غير جاهز بسبب خطأ في التحميل. يرجى مراجعة رسائل الخطأ.")
+    if interpreter is None:
+        st.warning("النموذج غير جاهز.")
         return None, None, None, None, None, None, None, None
 
     # 1. تجهيز المدخلات
-    input_array = np.array([input_values]).astype(float)
+    input_array = np.array([input_values]).astype(np.float32) # TFLite يفضل float32
     
     # 2. التطبيع (Normalization)
     try:
@@ -117,8 +115,13 @@ def run_prediction_and_analysis(input_values, model, scaler_X, scaler_y, indicat
         st.error(f"خطأ في التطبيع: تأكد من أنك تُدخل 12 قيمة بالضبط. {e}")
         return None, None, None, None, None, None, None, None
 
-    # 3. التنبؤ بالترتيب
-    y_scaled = model.predict(X_scaled, verbose=0)
+    # 3. التنبؤ باستخدام TFLite Interpreter
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    interpreter.set_tensor(input_details[0]['index'], X_scaled.astype(np.float32))
+    interpreter.invoke()
+    y_scaled = interpreter.get_tensor(output_details[0]['index'])
+
     y_pred_orig = scaler_y.inverse_transform(y_scaled).flatten()[0]
     
     # 4. تحليل الأولوية (Top 5 Risks)
@@ -148,7 +151,6 @@ def run_prediction_and_analysis(input_values, model, scaler_X, scaler_y, indicat
     df_impact = pd.DataFrame(impact_cost_rows)
     df_impact["ترتيب الأولوية"] = df_impact["نسبة الأثر إلى التكلفة"].rank(ascending=False, method="dense").astype(int)
     
-    # Handle case where DataFrame is empty (should not happen, but safe)
     if df_impact.empty:
         priority_1_indicator = "غير محدد"
     else:
@@ -161,7 +163,7 @@ def run_prediction_and_analysis(input_values, model, scaler_X, scaler_y, indicat
 # -------------------- 3. واجهة Streamlit --------------------
 # ======================================================================
 
-if model and indicator_names:
+if interpreter is not None and indicator_names:
     st.set_page_config(layout="wide", page_title="منصة مؤشر الترتيب الذكي")
     
     # CSS لتخصيص الخط العربي
@@ -200,7 +202,6 @@ if model and indicator_names:
     for i, ind_name in enumerate(indicator_names):
         col = input_cols[i % 2]
         # استخدام الحد الأدنى والحد الأقصى كنطاق لـ slider (افتراضًا من 0 إلى 100)
-        # يمكن تعديل النطاق بناءً على القيم الحقيقية لبياناتك
         val = col.slider(f"{ind_name} (0-100)", 0.0, 100.0, 50.0, key=f"input_{i}")
         input_values.append(val)
 
@@ -208,7 +209,7 @@ if model and indicator_names:
     if st.sidebar.button('تحليل التنبؤ والأولويات'):
         
         y_pred_orig, rank_strong, rank_partial, rank_weak, total_gain, m_synergy, top_inds, priority_1_indicator = run_prediction_and_analysis(
-            input_values, model, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map
+            input_values, interpreter, scaler_X, scaler_y, indicator_names, clusters, feature_importance_map
         )
         
         # Display results only if prediction was successful
