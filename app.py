@@ -143,14 +143,14 @@ def forecast_future_var(df_history, target_years, indicators):
     """
     التنبؤ بقيم المؤشرات باستخدام VAR Model.
     """
-    # تنظيف أسماء الأعمدة لتجنب KeyError
+    # 1. تنظيف أسماء الأعمدة لتجنب KeyError
     df_history.columns = df_history.columns.str.strip()
     
-    # التأكد من وجود جميع المؤشرات المطلوبة
+    # 2. التأكد من وجود الأعمدة
     available_indicators = [col for col in indicators if col in df_history.columns]
     
     if not available_indicators:
-        st.error("❌ لم يتم العثور على أي من أعمدة المؤشرات المطلوبة في الملف. تأكد من تطابق الأسماء.")
+        st.error("❌ لم يتم العثور على أي من أعمدة المؤشرات في الملف. تأكد من تطابق الأسماء.")
         st.stop()
 
     data_hist = df_history[available_indicators].dropna()
@@ -181,7 +181,7 @@ def forecast_future_var(df_history, target_years, indicators):
             prediction_results = np.column_stack(temp_preds)
             
     except Exception:
-        # البديل الأخير
+        # البديل الأخير (Linear Regression)
         temp_preds = []
         X_years = df_history['السنة'].values.reshape(-1, 1)
         future_X = np.array([[last_year + i] for i in range(1, steps + 1)])
@@ -262,7 +262,7 @@ def calculate_full_analysis(df_forecast, interpreter, scaler_X, scaler_y, indica
         # 2. الترتيب (Neural Network)
         pred_rank = run_neural_network_ranking(current_values, interpreter, scaler_X, scaler_y)
         
-        # 3. تحديد أضعف 5 مؤشرات لهذا العام
+        # 3. تحديد أضعف 5 مؤشرات لهذا العام (ديناميكي)
         risks_unsorted = []
         for idx, name in enumerate(indicator_names):
             risks_unsorted.append((name, current_values[idx]))
@@ -283,6 +283,8 @@ def calculate_full_analysis(df_forecast, interpreter, scaler_X, scaler_y, indica
         importance_sum = sum([feature_importance_map.get(ind, 0.05) for ind in top_inds_names])
         total_gain = pred_rank * 0.1 * importance_sum * m_synergy
         rank_strong = max(1.0, pred_rank - total_gain)
+        rank_partial = max(1.0, pred_rank - total_gain * 0.6)
+        rank_weak = max(1.0, pred_rank - total_gain * 0.3)
         
         # --- تخزين النتائج ---
         results_list.append({
@@ -292,15 +294,21 @@ def calculate_full_analysis(df_forecast, interpreter, scaler_X, scaler_y, indica
             "مؤشرات منخفضة": ", ".join(top_inds_names),
             "مكسب الترتيب المتوقع": round(total_gain, 2),
             "ترتيب بعد استجابة قوية": round(rank_strong, 2),
+            "ترتيب بعد استجابة جزئية": round(rank_partial, 2),
+            "ترتيب بعد استجابة ضعيفة": round(rank_weak, 2),
             "معامل التآزر": round(m_synergy, 4)
         })
         
+        # استخدام الفاصلة المنقوطة للتمييز الواضح في الشرح
         explanations_list.append({
             "السنة": year,
             "المؤشرات منخفضة": ", ".join(top_inds_names),
+            "أهمية المؤشرات": " | ".join([f"{ind}={round(feature_importance_map.get(ind,0), 4)}" for ind in top_inds_names]),
             "التوصيات التفصيلية": " | ".join([f"{ind}: {recommendations_map.get(ind,'-')}" for ind in top_inds_names]),
+            "شرح التنفيذ": " | ".join([f"{ind}: {execution_plan_map.get(ind,'-')}" for ind in top_inds_names])
         })
         
+        # مصفوفة الأثر والتكلفة
         for ind, val in top_5_risks:
             norm_val = val / 100.0
             weight = (max(1.0 - float(norm_val), 0.02)) * feature_importance_map.get(ind, 0.0)
@@ -312,13 +320,28 @@ def calculate_full_analysis(df_forecast, interpreter, scaler_X, scaler_y, indica
                 "نسبة الأثر إلى التكلفة": round(weight / 2, 6)
             })
             
+        # التوصيات الديناميكية (تحسن في الرتب)
         dynamic_recs_list.append({
             "السنة": year,
             "المؤشرات المنخفضة": ", ".join(top_inds_names),
+            "أهمية المؤشرات": " | ".join([f"{ind}={round(feature_importance_map.get(ind,0), 4)}" for ind in top_inds_names]),
             "خيار قوي (برنامج شامل)": f"تحسن ≈ {round(total_gain, 2)} رتبة",
+            "خيار جزئي (تدخل متوسط)": f"تحسن ≈ {round(total_gain * 0.6, 2)} رتبة",
+            "خيار ضعيف (تدخل سريع)": f"تحسن ≈ {round(total_gain * 0.3, 2)} رتبة"
         })
 
-    return pd.DataFrame(results_list), pd.DataFrame(explanations_list), pd.DataFrame(impact_matrix_list), pd.DataFrame(dynamic_recs_list)
+    # تحويل القوائم إلى DataFrames وتنسيق الأعمدة لتطابق الكولاب
+    df_results = pd.DataFrame(results_list)
+    df_explain = pd.DataFrame(explanations_list)
+    
+    df_impact = pd.DataFrame(impact_matrix_list)
+    if not df_impact.empty:
+        # حساب ترتيب الأولوية داخل كل سنة
+        df_impact["ترتيب الأولوية"] = df_impact.groupby("السنة")["نسبة الأثر إلى التكلفة"].rank(ascending=False, method="dense").astype(int)
+
+    df_dynamic = pd.DataFrame(dynamic_recs_list)
+
+    return df_results, df_explain, df_impact, df_dynamic
 
 def generate_full_excel(df_results, df_explain, df_impact, df_dynamic, accuracy_info):
     output = io.BytesIO()
@@ -349,7 +372,7 @@ with st.sidebar:
 if uploaded_file is not None:
     df_history = pd.read_excel(uploaded_file)
     
-    # تنظيف أسماء الأعمدة في الملف المرفوع مباشرة
+    # تنظيف أسماء الأعمدة (Trim spaces)
     if df_history is not None:
          df_history.columns = df_history.columns.str.strip()
 
