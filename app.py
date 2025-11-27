@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
+import io # مكتبة مهمة للتصدير
 from sklearn.linear_model import LinearRegression
 
 # ======================================================================
@@ -73,17 +74,16 @@ def load_assets_lite():
 
 loaded_assets = load_assets_lite()
 if loaded_assets is None:
-    st.error("⚠️ الملفات الأساسية مفقودة. تأكد من رفع ملفات النموذج.")
+    st.error("⚠️ الملفات الأساسية مفقودة.")
     st.stop()
 
 interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, clusters, feature_importance_map = loaded_assets
 
 # ======================================================================
-# -------------------- 3. دوال التنبؤ والمحاكاة (PARTS Core) --------------------
+# -------------------- 3. دوال التنبؤ والمحاكاة --------------------
 # ======================================================================
 
 def forecast_future_values(df_history, target_year, indicators):
-    """ التنبؤ بقيم المؤشرات لسنة محددة بناءً على البيانات التاريخية """
     row_data = {}
     years_train = df_history['السنة'].values.reshape(-1, 1)
     
@@ -99,7 +99,6 @@ def forecast_future_values(df_history, target_year, indicators):
     return row_data
 
 def run_ai_model(input_values_dict, interpreter, scaler_X, scaler_y, indicator_names):
-    """ تشغيل نموذج الذكاء الاصطناعي للحصول على الترتيب """
     values_list = [input_values_dict[name] for name in indicator_names]
     input_array = np.array([values_list]).astype(np.float32)
     
@@ -115,14 +114,43 @@ def run_ai_model(input_values_dict, interpreter, scaler_X, scaler_y, indicator_n
     return max(1.0, rank)
 
 def calculate_synergy(current_inputs, indicator_names, clusters):
-    """ حساب التآزر والمؤشرات الضعيفة """
     weak_inds = [name for name in indicator_names if current_inputs[name] < 60]
     hits = {c: len(set(weak_inds) & members) for c, members in clusters.items()}
     boost = 1.0 + (sum(1 for v in hits.values() if v >= 2) * 0.08)
     return min(boost, 1.25), weak_inds
 
+# دالة لتوليد ملف الإكسل
+def generate_excel_report(year, current_rank, baseline_rank, user_inputs, weak_inds):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # ورقة الملخص
+        summary_data = {
+            "المعيار": ["السنة المستهدفة", "الترتيب بعد المحاكاة", "الترتيب الأساسي (Baseline)", "التحسن"],
+            "القيمة": [year, f"{current_rank:.2f}", f"{baseline_rank:.2f}", f"{baseline_rank - current_rank:.2f}"]
+        }
+        pd.DataFrame(summary_data).to_excel(writer, sheet_name='ملخص النتائج', index=False)
+        
+        # ورقة تفاصيل المؤشرات
+        indicators_data = {
+            "المؤشر": list(user_inputs.keys()),
+            "القيمة المختارة": list(user_inputs.values())
+        }
+        pd.DataFrame(indicators_data).to_excel(writer, sheet_name='قيم المؤشرات', index=False)
+        
+        # ورقة التوصيات
+        if weak_inds:
+            recs_data = []
+            for ind in weak_inds:
+                recs_data.append({
+                    "المؤشر الضعيف": ind,
+                    "التوصية المقترحة": recommendations_map.get(ind, "-")
+                })
+            pd.DataFrame(recs_data).to_excel(writer, sheet_name='التوصيات', index=False)
+            
+    return output.getvalue()
+
 # ======================================================================
-# -------------------- 4. واجهة المستخدم (PARTS Framework UI) --------------------
+# -------------------- 4. واجهة المستخدم --------------------
 # ======================================================================
 
 st.set_page_config(layout="wide", page_title="نظام PARTS الهجين")
@@ -140,7 +168,6 @@ st.markdown("""
 st.title("🚀 نظام التنبؤ والمحاكاة الهجين (Hybrid PARTS Model)")
 st.markdown("---")
 
-# --- 1. البيانات والإعدادات ---
 st.sidebar.header("📂 1. البيانات التاريخية")
 uploaded_file = st.sidebar.file_uploader("ارفع ملف Excel (السنوات السابقة)", type=["xlsx"])
 
@@ -153,7 +180,6 @@ if uploaded_file is not None:
         
     last_year = int(df_history['السنة'].max())
     
-    # اختيار السنوات (نطاق مفتوح 10 سنوات)
     future_years_options = [last_year + i for i in range(1, 11)]
     selected_years = st.sidebar.multiselect(
         "اختر السنوات المستقبلية للتنبؤ بها:",
@@ -167,19 +193,16 @@ if uploaded_file is not None:
 
     st.header("📊 النتائج والمحاكاة (PARTS Simulator)")
     
-    # التبويبات
     tabs = st.tabs([str(year) for year in selected_years])
     
     for i, target_year in enumerate(selected_years):
         with tabs[i]:
             st.markdown(f"### 🗓️ محاكاة سنة {target_year}")
             
-            # التنبؤ الأولي
             forecasted_values = forecast_future_values(df_history, target_year, indicator_names)
             
             col_sim, col_results = st.columns([1, 2])
             
-            # عمود المحاكاة
             with col_sim:
                 st.info("🔧 اضبط المؤشرات (Simulation)")
                 user_inputs = {}
@@ -191,43 +214,5 @@ if uploaded_file is not None:
                         f"{name}", 0.0, 100.0, default_val, key=slider_key
                     )
             
-            # عمود النتائج
             with col_results:
-                current_rank = run_ai_model(user_inputs, interpreter, scaler_X, scaler_y, indicator_names)
-                baseline_rank = run_ai_model(forecasted_values, interpreter, scaler_X, scaler_y, indicator_names)
-                
-                synergy_factor, weak_inds = calculate_synergy(user_inputs, indicator_names, clusters)
-                
-                m1, m2, m3 = st.columns(3)
-                m1.metric("الترتيب المتوقع", f"{current_rank:.2f}")
-                m2.metric("معامل التآزر", f"{synergy_factor:.2f}x")
-                m3.metric("مؤشرات حرجة", f"{len(weak_inds)}")
-                
-                st.markdown("#### 📈 أثر التدخل على الترتيب")
-                chart_data = pd.DataFrame({
-                    "التنبؤ الآلي (Baseline)": [baseline_rank],
-                    "بعد المحاكاة (Simulation)": [current_rank]
-                })
-                st.bar_chart(chart_data, color=["#FF5722", "#4CAF50"])
-                
-                st.markdown("#### 💡 التوصيات الذكية")
-                if weak_inds:
-                    recs = []
-                    for ind in weak_inds:
-                        recs.append({
-                            "المؤشر": ind,
-                            "التوصية": recommendations_map.get(ind, "-"),
-                            "الأهمية": f"{feature_importance_map.get(ind, 0.5):.2f}"
-                        })
-                    st.dataframe(pd.DataFrame(recs), use_container_width=True)
-                else:
-                    st.success("أداء ممتاز! جميع المؤشرات أعلى من 60%.")
-
-else:
-    st.markdown("""
-    <div style='text-align: center; padding: 50px;'>
-        <h2>👋 مرحبًا بك في منصة PARTS الهجينة</h2>
-        <p>ابدأ برفع ملف Excel من القائمة الجانبية.</p>
-        <p>سيتيح لك النظام التنبؤ والمحاكاة لعدة سنوات قادمة.</p>
-    </div>
-    """, unsafe_allow_html=True)
+                current_rank = run_ai_model(user_inputs, interpreter, scaler_X, scaler_y, indicator
