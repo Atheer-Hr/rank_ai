@@ -16,11 +16,13 @@ import os
 
 @st.cache_resource
 def load_assets_secure():
+    # تعريف القيم الافتراضية للتعامل مع أي فشل
+    default_return = None, None, None, [], None, None, None, None
+
     # 1. جلب رابط التحميل الآمن من مفاتيح السرية (Secrets)
     if "ASSET_DOWNLOAD_URL" not in st.secrets:
         st.error("⚠️ فشل: لم يتم العثور على مفتاح ASSET_DOWNLOAD_URL السري. لا يمكن تحميل النموذج.")
-        # نرجع قيم None لضمان أن التطبيق لا ينهار ولكنه يعرض رسالة تحذير
-        return None, None, None, [], None, None, None, None
+        return default_return
 
     ASSET_URL = st.secrets["ASSET_DOWNLOAD_URL"]
     
@@ -31,17 +33,16 @@ def load_assets_secure():
         response.raise_for_status() 
         
         # فك ضغط الملفات في مسار مؤقت
-        with zipfile.ZipFile(BytesIO(response.content)) as z:
-            # استخدام z.namelist() للتحقق من الملفات داخل الـ zip (للتأكد من المسارات)
-            z.extractall(path="./temp_assets") # فك الضغط في مجلد مؤقت آمن
-        st.write("✅ تم تحميل وفك ضغط الأصول بنجاح.")
-        
-        # تحديد المسار المؤقت
         BASE_PATH = "./temp_assets/"
+        os.makedirs(BASE_PATH, exist_ok=True) # تأكد من وجود المجلد
+        
+        with zipfile.ZipFile(BytesIO(response.content)) as z:
+            z.extractall(path=BASE_PATH) 
+        st.write("✅ تم تحميل وفك ضغط الأصول بنجاح.")
 
     except Exception as e:
-        st.error(f"⚠️ خطأ في التحميل/فك الضغط. تأكد من إعدادات مشاركة Google Drive وصلاحية الرابط. الخطأ: {e}")
-        return None, None, None, [], None, None, None, None
+        st.error(f"⚠️ خطأ في التحميل/فك الضغط. تحقق من إعدادات مشاركة Google Drive وصلاحية الرابط. الخطأ: {e}")
+        return default_return
 
     # 3. تحميل النموذج والمتغيرات من الملفات التي تم فك ضغطها
     try:
@@ -97,12 +98,13 @@ def load_assets_secure():
         importances = importances / importances.sum()
         feature_importance_map = {indicator_names[i]: float(importances[i]) for i in range(len(indicator_names))}
 
+        # نرجع القيم التي تم تحميلها بنجاح
         return model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
     
     except Exception as e:
         # إذا حدث خطأ في التحميل من المسار المؤقت، نظهر الخطأ للمستخدم
         st.error(f"⚠️ خطأ في تحميل الأصول (بعد فك الضغط). تأكد من سلامة ملفاتك. الخطأ: {e}")
-        return None, None, None, [], None, None, None, None
+        return default_return
 
 # يجب استدعاء الدالة الجديدة هنا:
 model, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = load_assets_secure()
