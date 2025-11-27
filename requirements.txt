@@ -6,3 +6,5 @@ scikit-learn
 openpyxl
 tensorflow-cpu
 statsmodels
+scipy
+patsy
