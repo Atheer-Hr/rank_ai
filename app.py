@@ -1,93 +1,225 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import tensorflow.lite as tflite
 import joblib
-import io
 import os
+import io
 from sklearn.linear_model import LinearRegression
 
 # ======================================================================
-# 1. الإعدادات والتعريفات الأساسية (الجزء الناقص)
+# 🎨 إعدادات الصفحة والتصميم
 # ======================================================================
-st.set_page_config(page_title="منصة بارتز (PARTS)", layout="wide", page_icon="🚀")
+st.set_page_config(
+    layout="wide",
+    page_title="منصة بارتز (PARTS) الذكية",
+    page_icon="🚀"
+)
 
-# تعريف المؤشرات الـ 12 (ضروري لعمل الدوال)
-indicator_names = [
-    "التحصيل الدراسي", "القيادة المدرسية", "البيئة التعليمية", "التطوير المهني",
-    "الشراكة المجتمعية", "سلوك الطلاب", "الحضور والغياب", "رضا أولياء الأمور",
-    "المناهج الإثرائية", "الأنشطة اللاصفية", "الإرشاد الطلابي", "الموارد التقنية"
-]
-
-# تعريف المجموعات (Clusters)
-clusters = {
-    "الأكاديمي": {"التحصيل الدراسي", "المناهج الإثرائية", "الموارد التقنية"},
-    "الإداري": {"القيادة المدرسية", "التطوير المهني", "البيئة التعليمية"},
-    "الاجتماعي": {"الشراكة المجتمعية", "رضا أولياء الأمور", "سلوك الطلاب"}
-}
-
-feature_importance_map = {ind: 0.08 for ind in indicator_names}
-recommendations_map = {ind: "تفعيل خطط تحسين عاجلة ومراجعة الأداء الدوري." for ind in indicator_names}
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700&display=swap');
+    html, body, [class*="css"] { font-family: 'Tajawal', sans-serif; direction: rtl; }
+    h1 { color: #2c3e50; text-align: center; margin-bottom: 0; }
+    
+    /* بطاقات المعلومات */
+    .metric-card {
+        background-color: #fff; border: 1px solid #e0e0e0; border-radius: 12px;
+        padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); text-align: center;
+        transition: transform 0.2s;
+    }
+    .metric-card:hover { transform: translateY(-5px); }
+    .metric-value { font-size: 26px; font-weight: bold; color: #2c3e50; }
+    .metric-label { font-size: 14px; color: #7f8c8d; margin-bottom: 5px; }
+    .metric-icon { font-size: 30px; margin-bottom: 10px; }
+    
+    /* التبويبات */
+    .stTabs [data-baseweb="tab-list"] { justify-content: center; background-color: #f8f9fa; padding: 10px; border-radius: 10px; }
+    .stTabs [aria-selected="true"] { background-color: #e3f2fd !important; color: #1565c0 !important; font-weight: bold; }
+    
+    div[data-testid="stDataFrame"] { width: 100%; }
+</style>
+""", unsafe_allow_html=True)
 
 # ======================================================================
-# 2. تحميل النماذج (مصحح لمسار الملفات)
+# 🛠️ 1. التحقق من المكتبات (VAR & TensorFlow)
+# ======================================================================
+try:
+    from statsmodels.tsa.api import VAR
+    from statsmodels.tsa.ar_model import AutoReg
+except ImportError:
+    st.error("⚠️ مكتبة 'statsmodels' مفقودة. الرجاء التأكد من إضافتها لملف requirements.txt وعمل Reboot.")
+    st.stop()
+
+try:
+    import tensorflow as tf
+    Interpreter = tf.lite.Interpreter
+except ImportError:
+    try:
+        from tensorflow.lite import Interpreter
+    except ImportError:
+        try:
+            from tflite_runtime.interpreter import Interpreter
+        except ImportError:
+            st.error("❌ خطأ: مكتبة TensorFlow غير مثبتة.")
+            st.stop()
+
+# ======================================================================
+# -------------------- 2. تحميل الأصول --------------------
 # ======================================================================
 @st.cache_resource
-def load_assets():
+def load_assets_lite():
+    # القواميس
+    recommendations_map = {
+        "الكفاءة للعنصر البشري": "تطوير برامج تدريبية مستمرة للمعلمين وربطها بتقييم الأداء الفردي.",
+        "المناهج": "مراجعة شاملة للمناهج وتحديثها لتتوافق مع مهارات القرن 21.",
+        "التطور المهني": "إنشاء مسارات مهنية واضحة للمعلمين مع حوافز مرتبطة بالإنجاز.",
+        "تعزيز الشخصية": "إطلاق برامج إرشاد نفسي واجتماعي لتعزيز الثقة والقيادة لدى الطلاب.",
+        "التقويم التربوي": "تطوير أدوات تقييم معيارية رقمية لقياس نواتج التعلم بدقة.",
+        "الشراكة مع القطاع الخاص": "توسيع الشراكات مع الشركات لدعم التدريب العملي والموارد التقنية.",
+        "مشاركة الاسرة": "تفعيل مجالس أولياء الأمور وإشراكهم في متابعة الأداء المدرسي.",
+        "المرافق التعليمية والمباني": "تحديث البنية التحتية وتوفير بيئة صفية جاذبة وآمنة.",
+        "التقنية بالمدارس": "تعميم الفصول الذكية وربطها بمنصات تعليمية رقمية.",
+        "قياس الأداء المدرسي": "إدخال مؤشرات أداء رئيسية (KPIs) لمتابعة تقدم المدارس بشكل دوري.",
+        "استراتيجيات التدريس": "تطبيق استراتيجيات تعلم نشط وتدريس تفريدية تراعي الفروق الفردية.",
+        "الاختبارات المعيارية": "إعداد اختبارات معيارية وطنية لمقارنة الأداء بين المدارس والمناطق."
+    }
+    
+    execution_plan_map = {
+        "الكفاءة للعنصر البشري": "توزيع برامج تدريبية حسب مستويات المعلمين وربطها بتقييم الأداء السنوي.",
+        "المناهج": "تشكيل لجان مراجعة للمناهج وربط التحديثات بنتائج الاختبارات المعيارية.",
+        "التطور المهني": "تصميم مسارات مهنية فردية مع متابعة فصلية وتقييم تطبيقي.",
+        "تعزيز الشخصية": "تنفيذ أنشطة صفية ولاصفية تعزز القيادة والانضباط الذاتي.",
+        "التقويم التربوي": "إعادة تصميم أدوات التقويم وربطها بمؤشرات الأداء المدرسي.",
+        "الشراكة مع القطاع الخاص": "توقيع اتفاقيات تعاون مع شركات محلية لدعم التدريب والمرافق.",
+        "مشاركة الاسرة": "إطلاق منصة تواصل مع أولياء الأمور وربطها بتقارير الأداء.",
+        "المرافق التعليمية والمباني": "تحديد أولويات الصيانة والتجهيز حسب كثافة الطلاب.",
+        "التقنية بالمدارس": "توزيع الأجهزة وربطها بمنصات تعليمية وتدريب المعلمين عليها.",
+        "قياس الأداء المدرسي": "تطبيق نظام مؤشرات أداء شهري وربطه بالتحفيز الإداري.",
+        "استراتيجيات التدريس": "تدريب المعلمين على التعلم النشط والتقويم التكويني.",
+        "الاختبارات المعيارية": "تصميم اختبارات وطنية موحدة وربط نتائجها بخطط التحسين."
+    }
+    
+    clusters = {
+        "تعليم": {"استراتيجيات التدريس","المناهج","التطور المهني"},
+        "تقييم": {"التقويم التربوي","الاختبارات المعيارية","قياس الأداء المدرسي"},
+        "أسرة ومجتمع": {"مشاركة الاسرة","الشراكة مع القطاع الخاص","تعزيز الشخصية"},
+        "بيئة وتجهيز": {"المرافق التعليمية والمباني","التقنية بالمدارس"}
+    }
+
     try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        model_path = os.path.join(current_dir, "model.tflite")
-        scaler_x_path = os.path.join(current_dir, "scaler_X.save")
-        scaler_y_path = os.path.join(current_dir, "scaler_y.save")
-
-        interpreter = tflite.Interpreter(model_path=model_path) 
+        if not os.path.exists('ranking_model_lite.tflite'): return None
+        interpreter = Interpreter(model_path='ranking_model_lite.tflite')
         interpreter.allocate_tensors()
-        scaler_X = joblib.load(scaler_x_path) 
-        scaler_y = joblib.load(scaler_y_path)
-        return interpreter, scaler_X, scaler_y
+
+        scaler_X = joblib.load('scaler_X_lite.pkl')
+        scaler_y = joblib.load('scaler_y_lite.pkl')
+        
+        indicator_names = []
+        if os.path.exists('indicator_names_lite.txt'):
+            with open('indicator_names_lite.txt', 'r', encoding='utf-8') as f:
+                indicator_names = [line.strip() for line in f]
+        
+        feature_importance_map = joblib.load('feature_importance_map.pkl') if os.path.exists('feature_importance_map.pkl') else {}
+        if not feature_importance_map and indicator_names:
+            feature_importance_map = {name: 1.0 for name in indicator_names}
+
+        return interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map
+    
     except Exception as e:
-        st.error(f"⚠️ خطأ في تحميل الملفات: {e}")
-        return None, None, None
+        return None
 
-interpreter, scaler_X, scaler_y = load_assets()
+loaded_assets = load_assets_lite()
+if loaded_assets is None:
+    st.error("⚠️ الملفات الأساسية مفقودة (ranking_model_lite.tflite, scalers).")
+    st.stop()
+
+interpreter, scaler_X, scaler_y, indicator_names, recommendations_map, execution_plan_map, clusters, feature_importance_map = loaded_assets
 
 # ======================================================================
-# 3. دالة التنبؤ (الجزء الناقص الذي يستدعيه كودك)
+# -------------------- 3. منطق التنبؤ (VAR) + النموذج العصبي (NN) --------------------
 # ======================================================================
-def forecast_future_var(df_history, future_years, indicators):
-    forecast_rows = []
-    X_train = df_history['السنة'].values.reshape(-1, 1)
+
+def forecast_future_var(df_history, target_years, indicators):
+    """
+    التنبؤ بقيم المؤشرات باستخدام VAR Model.
+    """
+    # تنظيف أسماء الأعمدة لتجنب KeyError
+    df_history.columns = df_history.columns.str.strip()
     
-    future_data = {year: {} for year in future_years}
+    # التأكد من وجود جميع المؤشرات المطلوبة
+    available_indicators = [col for col in indicators if col in df_history.columns]
     
-    for ind in indicators:
-        y_train = df_history[ind].values
-        model = LinearRegression()
-        model.fit(X_train, y_train)
-        X_future = np.array(future_years).reshape(-1, 1)
-        predictions = model.predict(X_future)
-        
-        for i, year in enumerate(future_years):
-            val = max(0.0, min(100.0, predictions[i]))
-            future_data[year][ind] = val
+    if not available_indicators:
+        st.error("❌ لم يتم العثور على أي من أعمدة المؤشرات المطلوبة في الملف. تأكد من تطابق الأسماء.")
+        st.stop()
+
+    data_hist = df_history[available_indicators].dropna()
+    n_samples, n_features = data_hist.shape
+    
+    last_year = int(df_history['السنة'].max())
+    max_target_year = max(target_years)
+    steps = max_target_year - last_year
+    
+    prediction_results = None
+    
+    try:
+        # محاولة استخدام VAR
+        if n_samples > n_features + 2: 
+            model = VAR(data_hist)
+            results = model.fit(maxlags=1)
+            lag_order = results.k_ar
+            prediction_results = results.forecast(data_hist.values[-lag_order:], steps=steps)
+        else:
+            # استخدام AR كبديل
+            temp_preds = []
+            for col in available_indicators:
+                series = data_hist[col].values
+                model = AutoReg(series, lags=1)
+                model_fit = model.fit()
+                pred = model_fit.predict(start=len(series), end=len(series)+steps-1)
+                temp_preds.append(pred)
+            prediction_results = np.column_stack(temp_preds)
             
-    for year in future_years:
-        row = {"السنة": year}
-        row.update(future_data[year])
-        forecast_rows.append(row)
-        
-    return pd.DataFrame(forecast_rows)
+    except Exception:
+        # البديل الأخير
+        temp_preds = []
+        X_years = df_history['السنة'].values.reshape(-1, 1)
+        future_X = np.array([[last_year + i] for i in range(1, steps + 1)])
+        for col in available_indicators:
+            reg = LinearRegression().fit(X_years, df_history[col].values)
+            pred = reg.predict(future_X)
+            temp_preds.append(pred)
+        prediction_results = np.column_stack(temp_preds)
 
-# ======================================================================
-# 4. دوال التحليل والواجهة (الكود الخاص بك كما هو)
-# ======================================================================
+    # إضافة تذبذب طبيعي بسيط
+    np.random.seed(42)
+    noise = np.random.uniform(-1.5, 1.5, size=prediction_results.shape)
+    prediction_results += noise
+    prediction_results = np.clip(prediction_results, 0.0, 100.0)
+    
+    # تحويل إلى DataFrame
+    years_range = range(last_year + 1, max_target_year + 1)
+    full_forecast_df = pd.DataFrame(prediction_results, columns=available_indicators)
+    full_forecast_df['السنة'] = years_range
+    
+    # إضافة الأعمدة المفقودة بقيم افتراضية (لتجنب الأخطاء لاحقاً)
+    for col in indicators:
+        if col not in full_forecast_df.columns:
+            full_forecast_df[col] = 50.0
+
+    final_rows = []
+    for year in target_years:
+        if year in full_forecast_df['السنة'].values:
+            row = full_forecast_df[full_forecast_df['السنة'] == year].iloc[0].to_dict()
+            row['نوع السنة'] = 'متنبأ بها'
+            final_rows.append(row)
+        
+    return pd.DataFrame(final_rows)
 
 def run_neural_network_ranking(input_values, interpreter, scaler_X, scaler_y):
     """
     استخدام نموذجك العصبي (TFLite) للتنبؤ بالترتيب.
     """
-    if interpreter is None: return 50.0 
-
     input_array = np.array([input_values]).astype(np.float32)
     X_scaled = scaler_X.transform(input_array)
     
@@ -116,7 +248,10 @@ def calculate_full_analysis(df_forecast, interpreter, scaler_X, scaler_y, indica
         year = row['السنة']
         
         # 1. القيم (VAR) + التحسين التراكمي
-        base_values = row[indicator_names].values.astype(float)
+        # نتأكد من ترتيب القيم حسب indicator_names
+        base_values = [row.get(name, 50.0) for name in indicator_names]
+        base_values = np.array(base_values, dtype=float)
+
         current_values = []
         for idx, name in enumerate(indicator_names):
             improved_val = base_values[idx] + accumulated_improvements[name]
@@ -196,7 +331,7 @@ def generate_full_excel(df_results, df_explain, df_impact, df_dynamic, accuracy_
     return output.getvalue()
 
 # ======================================================================
-# واجهة المستخدم الاحترافية
+# -------------------- 4. واجهة المستخدم الاحترافية --------------------
 # ======================================================================
 
 st.markdown("""
@@ -214,6 +349,10 @@ with st.sidebar:
 if uploaded_file is not None:
     df_history = pd.read_excel(uploaded_file)
     
+    # تنظيف أسماء الأعمدة في الملف المرفوع مباشرة
+    if df_history is not None:
+         df_history.columns = df_history.columns.str.strip()
+
     if 'السنة' not in df_history.columns:
         st.error("❌ الملف يجب أن يحتوي على عمود 'السنة'.")
         st.stop()
