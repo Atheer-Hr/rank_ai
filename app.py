@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
-import io # مكتبة مهمة للتصدير
+import io
 from sklearn.linear_model import LinearRegression
 
 # ======================================================================
@@ -119,7 +119,6 @@ def calculate_synergy(current_inputs, indicator_names, clusters):
     boost = 1.0 + (sum(1 for v in hits.values() if v >= 2) * 0.08)
     return min(boost, 1.25), weak_inds
 
-# دالة لتوليد ملف الإكسل
 def generate_excel_report(year, current_rank, baseline_rank, user_inputs, weak_inds):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -215,4 +214,54 @@ if uploaded_file is not None:
                     )
             
             with col_results:
-                current_rank = run_ai_model(user_inputs, interpreter, scaler_X, scaler_y, indicator
+                # هنا تم تصحيح الخطأ (إغلاق القوس بشكل صحيح)
+                current_rank = run_ai_model(user_inputs, interpreter, scaler_X, scaler_y, indicator_names)
+                baseline_rank = run_ai_model(forecasted_values, interpreter, scaler_X, scaler_y, indicator_names)
+                
+                synergy_factor, weak_inds = calculate_synergy(user_inputs, indicator_names, clusters)
+                
+                m1, m2, m3 = st.columns(3)
+                m1.metric("الترتيب المتوقع", f"{current_rank:.2f}")
+                m2.metric("معامل التآزر", f"{synergy_factor:.2f}x")
+                m3.metric("مؤشرات حرجة", f"{len(weak_inds)}")
+                
+                st.markdown("#### 📈 أثر التدخل على الترتيب")
+                
+                if current_rank == baseline_rank:
+                    st.caption("ℹ️ الرسم البياني متطابق لأنك لم تقم بتغيير قيم المؤشرات عن التنبؤ الأساسي بعد.")
+
+                chart_data = pd.DataFrame({
+                    "التنبؤ الآلي (Baseline)": [baseline_rank],
+                    "بعد المحاكاة (Simulation)": [current_rank]
+                })
+                st.bar_chart(chart_data, color=["#FF5722", "#4CAF50"])
+                
+                st.markdown("---")
+                excel_data = generate_excel_report(target_year, current_rank, baseline_rank, user_inputs, weak_inds)
+                st.download_button(
+                    label=f"📥 تصدير تقرير سنة {target_year} (Excel)",
+                    data=excel_data,
+                    file_name=f"sim_report_{target_year}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                
+                st.markdown("#### 💡 التوصيات الذكية")
+                if weak_inds:
+                    recs = []
+                    for ind in weak_inds:
+                        recs.append({
+                            "المؤشر": ind,
+                            "التوصية": recommendations_map.get(ind, "-"),
+                            "الأهمية": f"{feature_importance_map.get(ind, 0.5):.2f}"
+                        })
+                    st.dataframe(pd.DataFrame(recs), use_container_width=True)
+                else:
+                    st.success("أداء ممتاز! جميع المؤشرات أعلى من 60%.")
+
+else:
+    st.markdown("""
+    <div style='text-align: center; padding: 50px;'>
+        <h2>👋 مرحبًا بك في منصة PARTS الهجينة</h2>
+        <p>ابدأ برفع ملف Excel من القائمة الجانبية.</p>
+    </div>
+    """, unsafe_allow_html=True)
